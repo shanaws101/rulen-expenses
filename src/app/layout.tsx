@@ -8,6 +8,15 @@ export const metadata: Metadata = {
   title: 'Rulen Expenses — Remote Expense Intelligence & Approval Ops',
   description:
     'Multi-currency expense tracker, approvals queue, budgeting, and financial reporting for remote teams.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico' },
+      { url: '/favicon.png', type: 'image/png' },
+      { url: '/icon.png', type: 'image/png' },
+    ],
+    shortcut: '/favicon.ico',
+    apple: '/favicon.png',
+  },
 };
 
 export default function RootLayout({
@@ -17,6 +26,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="h-full">
+      <head>
+        <link rel="icon" href="/favicon.png" type="image/png" />
+        <link rel="apple-touch-icon" href="/favicon.png" />
+      </head>
       <body className="min-h-full flex flex-col bg-white selection:bg-cohere-soft-coral selection:text-black">
         <ExpenseProvider>
           <AnnouncementBar />
