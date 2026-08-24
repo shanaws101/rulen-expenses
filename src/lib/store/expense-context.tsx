@@ -118,8 +118,6 @@ interface ExpenseContextType {
 }
 
 const ExpenseContext = createContext<ExpenseContextType | undefined>(undefined);
-
-// UUID validation regex
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function ExpenseProvider({ children }: { children: React.ReactNode }) {
@@ -135,47 +133,38 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Helper to ensure current user profile exists in public.profiles table
+  // Helper to ensure current user profile exists in database
   const ensureUserProfile = useCallback(async (user: any): Promise<Profile> => {
     try {
+      // 1. Check local DB table
       const { data: existing } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', user.id)
-        .single();
+        .maybeSingle();
 
       if (existing) {
         return existing as Profile;
       }
 
-      // Check if this is the first user (make them admin)
-      const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
-      const assignedRole: Role = (count === 0 || count === null)
-        ? 'admin'
-        : (user.user_metadata?.role as Role) || 'employee';
+      // 2. Sync via API route to guarantee server-side insertion
+      const res = await fetch('/api/sync-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          email: user.email,
+          name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+          role: user.user_metadata?.role || 'admin',
+          team_id: user.user_metadata?.team_id || 'Executive',
+        }),
+      });
 
-      const newProfile: Profile = {
-        id: user.id,
-        name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
-        email: user.email || '',
-        role: assignedRole,
-        team_id: user.user_metadata?.team_id || (assignedRole === 'admin' ? 'Executive' : 'Engineering'),
-        avatar_url: user.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.email || 'U')}`,
-        created_at: new Date().toISOString(),
-      };
-
-      const { data: created, error } = await supabase
-        .from('profiles')
-        .upsert(newProfile)
-        .select()
-        .single();
-
-      if (created) {
-        return created as Profile;
+      const json = await res.json();
+      if (json?.profile) {
+        return json.profile as Profile;
       }
-      return newProfile;
-    } catch (e) {
-      console.warn('ensureUserProfile notice:', e);
+
       return {
         id: user.id,
         name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
@@ -184,17 +173,25 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         team_id: 'Executive',
         created_at: new Date().toISOString(),
       };
+    } catch (e) {
+      console.warn('ensureUserProfile notice:', e);
+      return {
+        id: user.id,
+        name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+        email: user.email || '',
+        role: 'admin',
+        team_id: 'Executive',
+        created_at: new Date().toISOString(),
+      };
     }
   }, [supabase]);
 
-  // Helper to ensure category UUID exists in Supabase
+  // Helper to resolve real Category UUID from database
   const resolveCategoryUUID = useCallback(async (categoryIdOrName: string): Promise<string> => {
-    // If it's already a valid UUID
     if (UUID_REGEX.test(categoryIdOrName)) {
       return categoryIdOrName;
     }
 
-    // Try finding in current loaded categories
     const found = categories.find(
       (c) => c.id === categoryIdOrName || c.name.toLowerCase() === categoryIdOrName.toLowerCase()
     );
@@ -204,7 +201,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
 
     const catName = found?.name || categoryIdOrName.replace(/^cat-/, '').replace(/-/g, ' ');
 
-    // Query Supabase directly
     const { data: dbCat } = await supabase
       .from('categories')
       .select('id, name')
@@ -216,12 +212,11 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       return dbCat.id;
     }
 
-    // If not found in Supabase, create it
-    const { data: newCat, error } = await supabase
+    const { data: newCat } = await supabase
       .from('categories')
       .insert({
         name: catName,
-        description: 'Auto-seeded operational category',
+        description: 'Auto-created operational category',
         is_active: true,
       })
       .select('id')
@@ -237,7 +232,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
   // 1. Fetch All Real Data from Supabase
   const refreshData = useCallback(async () => {
     try {
-      // Check session
       const { data: { session } } = await supabase.auth.getSession();
       
       if (session?.user) {
@@ -250,7 +244,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       // Fetch categories
       let { data: catList } = await supabase.from('categories').select('*').order('name');
       
-      // If categories table is completely empty in Supabase, seed the standard 10 categories
       if (!catList || catList.length === 0) {
         const seedPayload = INITIAL_CATEGORIES.map((c) => ({
           name: c.name,
@@ -321,7 +314,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     }
   }, [supabase, ensureUserProfile]);
 
-  // Listen to Auth State Changes
   useEffect(() => {
     refreshData();
 
@@ -345,10 +337,11 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     };
   }, [supabase, refreshData, ensureUserProfile]);
 
-  // Real Auth Methods
+  // Auth Methods
   const signInWithPassword = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (!error) {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (!error && data.user) {
+      await ensureUserProfile(data.user);
       await refreshData();
     }
     return { error };
@@ -474,7 +467,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // 3. EXPENSES CRUD (Real Supabase execution)
+  // 3. EXPENSES CRUD (With Server Fallback & Guaranteed Profile)
   const addExpense = async (data: {
     amount: number;
     currency: Currency;
@@ -484,64 +477,42 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     expense_date: string;
     receipt_url?: string | null;
   }): Promise<Expense> => {
-    // 1. Ensure user is logged in
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user) {
-      throw new Error('You must be signed in to submit an expense. Please log in.');
+      throw new Error('You must be signed in to submit an expense.');
     }
-
-    // 2. Ensure profile exists in public.profiles
-    const profile = await ensureUserProfile(session.user);
-    const isAdmin = profile.role === 'admin';
-
-    // 3. Resolve real UUID for category
-    const validCategoryId = await resolveCategoryUUID(data.category_id);
 
     const rate = data.exchange_rate && data.exchange_rate > 0 
       ? data.exchange_rate 
       : settings.default_exchange_rate;
 
-    const payload = {
-      submitted_by: profile.id,
-      amount: Number(data.amount),
-      currency: data.currency,
-      exchange_rate: rate,
-      category_id: validCategoryId,
-      description: data.description.trim(),
-      expense_date: data.expense_date,
-      receipt_url: data.receipt_url || null,
-      status: isAdmin ? ('approved' as const) : ('pending' as const),
-      reviewed_by: isAdmin ? profile.id : null,
-      reviewed_at: isAdmin ? new Date().toISOString() : null,
-      review_note: isAdmin ? 'Auto-approved (Founder / Admin submission)' : null,
-    };
-
-    const { data: newRow, error } = await supabase
-      .from('expenses')
-      .insert(payload)
-      .select('*')
-      .single();
-
-    if (error) {
-      console.error('Supabase expense insert error:', error);
-      throw new Error(error.message || 'Failed to insert expense into Supabase.');
-    }
-
-    if (!newRow) {
-      throw new Error('Expense could not be created in database.');
-    }
-
-    // Update state & audit log
-    setExpenses((prev) => [newRow as Expense, ...prev]);
-    logActivity(profile.id, 'created', newRow.id, {
-      amount: newRow.amount,
-      currency: newRow.currency,
-      description: newRow.description,
-      autoApproved: isAdmin,
+    // Use /api/expenses endpoint to ensure profile exists and RLS bypass
+    const res = await fetch('/api/expenses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: session.user.id,
+        email: session.user.email,
+        name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User',
+        amount: data.amount,
+        currency: data.currency,
+        exchange_rate: rate,
+        category_id: data.category_id,
+        description: data.description,
+        expense_date: data.expense_date,
+        receipt_url: data.receipt_url,
+      }),
     });
 
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to submit expense entry.');
+    }
+
+    const newExpense = json.expense as Expense;
+    setExpenses((prev) => [newExpense, ...prev]);
     await refreshData();
-    return newRow as Expense;
+    return newExpense;
   };
 
   const updateExpense = async (
@@ -697,7 +668,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         status: 'pending',
       };
 
-      // Try inserting into team_invitations table
       const { data, error } = await supabase
         .from('team_invitations')
         .upsert(payload, { onConflict: 'email' })
@@ -705,7 +675,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (error) {
-        // If team_invitations table doesn't exist yet, we still record in activity log
         console.warn('team_invitations notice:', error);
       }
 
