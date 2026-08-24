@@ -105,10 +105,10 @@ export function ExpenseTable({ expenses, showFilters = true }: ExpenseTableProps
             </thead>
             <tbody className="divide-y divide-cohere-hairline text-xs font-body">
               {expenses.map((expense) => {
-                const isSubmitter = expense.submitted_by === currentUser.id;
-                const isAdmin = currentUser.role === 'admin';
-                const isManager = currentUser.role === 'manager';
-                const canReview = (isAdmin || (isManager && expense.submitter?.manager_id === currentUser.id)) && expense.status === 'pending';
+                const isSubmitter = currentUser ? expense.submitted_by === currentUser.id : false;
+                const isAdmin = currentUser?.role === 'admin';
+                const isManager = currentUser?.role === 'manager';
+                const canReview = (isAdmin || (isManager && expense.submitter?.manager_id === currentUser?.id)) && expense.status === 'pending';
                 const canEditResubmit = isSubmitter && (expense.status === 'rejected' || expense.status === 'pending');
                 const canDelete = isAdmin || (isSubmitter && expense.status === 'pending');
 

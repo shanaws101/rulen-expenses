@@ -94,16 +94,16 @@ export function MetricsCards() {
         </div>
         <div className="mt-2 flex items-baseline gap-2">
           <span className="text-2xl font-bold font-mono text-cohere-ink">
-            {currentUser.role === 'employee'
+            {currentUser?.role === 'employee'
               ? scopedExpenses.filter((e) => e.status === 'pending').length
               : pendingApprovals.length}
           </span>
           <span className="text-xs text-cohere-slate">
-            {currentUser.role === 'employee' ? 'awaiting manager review' : 'requiring your review'}
+            {currentUser?.role === 'employee' ? 'awaiting manager review' : 'requiring your review'}
           </span>
         </div>
         <div className="mt-2 pt-2 border-t border-cohere-card-border">
-          {currentUser.role !== 'employee' ? (
+          {currentUser && currentUser.role !== 'employee' ? (
             <Link
               href="/approvals"
               className="text-[11px] font-mono font-medium text-cohere-action-blue hover:underline flex items-center justify-between"

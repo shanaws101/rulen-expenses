@@ -22,7 +22,7 @@ export function BudgetMeter({
   onDelete,
 }: BudgetMeterProps) {
   const { settings, currentUser } = useExpenses();
-  const isAdmin = currentUser.role === 'admin';
+  const isAdmin = currentUser?.role === 'admin';
 
   // Budget limit converted to BDT
   const budgetLimitBDT = convertToBDT(

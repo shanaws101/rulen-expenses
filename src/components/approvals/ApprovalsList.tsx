@@ -16,7 +16,7 @@ export function ApprovalsList() {
     }
   };
 
-  if (currentUser.role === 'employee') {
+  if (!currentUser || currentUser.role === 'employee') {
     return (
       <div className="p-8 bg-white border border-cohere-hairline rounded-lg text-center">
         <Shield className="w-8 h-8 text-cohere-slate mx-auto mb-2 opacity-60" />

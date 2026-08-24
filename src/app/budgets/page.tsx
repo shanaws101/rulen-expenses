@@ -6,14 +6,15 @@ import { BudgetMeter } from '@/components/budgets/BudgetMeter';
 import { BudgetModal } from '@/components/budgets/BudgetModal';
 import { Budget, Category } from '@/lib/types';
 import { convertToBDT, formatBDT } from '@/lib/currency';
-import { Plus, PieChart, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { Plus, PieChart, ShieldAlert, CheckCircle2, LogIn } from 'lucide-react';
+import Link from 'next/link';
 
 export default function BudgetsPage() {
-  const { budgets, categories, scopedExpenses, settings, currentUser, deleteBudget } = useExpenses();
+  const { budgets, categories, scopedExpenses, settings, currentUser, deleteBudget, isLoading } = useExpenses();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState<Budget | null>(null);
 
-  const isAdmin = currentUser.role === 'admin';
+  const isAdmin = currentUser?.role === 'admin';
   const currentMonth = new Date().toISOString().substring(0, 7);
 
   // Active non-rejected expenses for current month
@@ -35,6 +36,28 @@ export default function BudgetsPage() {
 
   const totalSpentBDT = currentExpenses.reduce((sum, e) => sum + e.converted_amount_bdt, 0);
   const overallPercentage = totalBudgetBDT > 0 ? Math.round((totalSpentBDT / totalBudgetBDT) * 100) : 0;
+
+  if (isLoading) {
+    return (
+      <div className="py-24 text-center">
+        <div className="w-8 h-8 border-2 border-cohere-near-black border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-xs font-mono text-cohere-muted-slate">Loading budgets...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="py-16 text-center max-w-md mx-auto space-y-4">
+        <h2 className="text-xl font-bold font-display text-cohere-ink">Sign In Required</h2>
+        <p className="text-xs text-cohere-slate">Please sign in to monitor and manage company budgets.</p>
+        <Link href="/login" className="inline-flex items-center gap-2 px-5 py-2 rounded-pill bg-cohere-near-black text-white text-xs font-semibold">
+          <LogIn className="w-3.5 h-3.5" />
+          <span>Sign In</span>
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -102,36 +125,46 @@ export default function BudgetsPage() {
       </div>
 
       {/* Grid of Category Budget Meters */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {budgets.map((budget) => {
-          const category = categories.find((c) => c.id === budget.category_id) || {
-            id: budget.category_id,
-            name: 'Unassigned Category',
-            description: '',
-            is_active: true,
-            created_at: '',
-          };
-          const spent = categorySpendMap.get(budget.category_id) || 0;
+      {budgets.length === 0 ? (
+        <div className="py-16 text-center bg-white border border-cohere-hairline rounded-lg">
+          <PieChart className="w-8 h-8 text-cohere-muted-slate mx-auto mb-2 opacity-50" />
+          <h3 className="text-sm font-semibold text-cohere-ink font-display">No budgets configured yet</h3>
+          <p className="text-xs text-cohere-slate mt-1 max-w-sm mx-auto">
+            {isAdmin ? 'Click "Set Category Budget" to define monthly spending limits for categories.' : 'No category budgets have been configured by company admins yet.'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {budgets.map((budget) => {
+            const category = categories.find((c) => c.id === budget.category_id) || {
+              id: budget.category_id,
+              name: 'Unassigned Category',
+              description: '',
+              is_active: true,
+              created_at: '',
+            };
+            const spent = categorySpendMap.get(budget.category_id) || 0;
 
-          return (
-            <BudgetMeter
-              key={budget.id}
-              budget={budget}
-              category={category}
-              spentBDT={spent}
-              onEdit={(b) => {
-                setEditingBudget(b);
-                setIsModalOpen(true);
-              }}
-              onDelete={(id) => {
-                if (confirm('Remove this category budget?')) {
-                  deleteBudget(id);
-                }
-              }}
-            />
-          );
-        })}
-      </div>
+            return (
+              <BudgetMeter
+                key={budget.id}
+                budget={budget}
+                category={category}
+                spentBDT={spent}
+                onEdit={(b) => {
+                  setEditingBudget(b);
+                  setIsModalOpen(true);
+                }}
+                onDelete={(id) => {
+                  if (confirm('Remove this category budget?')) {
+                    deleteBudget(id);
+                  }
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
 
       {/* Budget Modal */}
       {isModalOpen && (

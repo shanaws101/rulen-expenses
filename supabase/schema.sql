@@ -282,6 +282,46 @@ create or replace trigger on_expense_update_timestamp
   for each row
   execute function public.set_updated_at();
 
+-- Trigger to automatically create a profile when a new user signs up in Supabase Auth
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+as $$
+declare
+  user_count int;
+  assigned_role text;
+begin
+  select count(*) into user_count from public.profiles;
+  -- If this is the first user, assign 'admin' role (Founder), otherwise default to 'employee' or metadata role
+  if user_count = 0 then
+    assigned_role := 'admin';
+  else
+    assigned_role := coalesce(new.raw_user_meta_data->>'role', 'employee');
+  end if;
+
+  insert into public.profiles (id, name, email, role, team_id, avatar_url)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+    new.email,
+    assigned_role,
+    coalesce(new.raw_user_meta_data->>'team_id', 'Engineering'),
+    coalesce(new.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/initials/svg?seed=' || encode(new.email::bytea, 'hex'))
+  )
+  on conflict (id) do update set
+    name = excluded.name,
+    email = excluded.email;
+
+  return new;
+end;
+$$;
+
+create or replace trigger on_auth_user_created
+  after insert on auth.users
+  for each row
+  execute function public.handle_new_user();
+
 -- ----------------------------------------------------------------------------
 -- STORAGE SETUP (For Receipt Uploads)
 -- ----------------------------------------------------------------------------

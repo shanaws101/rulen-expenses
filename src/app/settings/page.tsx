@@ -6,16 +6,38 @@ import { CategoryManager } from '@/components/settings/CategoryManager';
 import { ExchangeRateManager } from '@/components/settings/ExchangeRateManager';
 import { UserManager } from '@/components/settings/UserManager';
 import { AuditLogViewer } from '@/components/settings/AuditLogViewer';
-import { Settings, Shield, Lock, Coins, Tag, Users, Activity } from 'lucide-react';
+import { Settings, Shield, Lock, Coins, Tag, Users, Activity, LogIn } from 'lucide-react';
+import Link from 'next/link';
 
 export default function SettingsPage() {
-  const { currentUser, setCurrentUser, profiles } = useExpenses();
+  const { currentUser, isLoading } = useExpenses();
   const [activeTab, setActiveTab] = useState<'categories' | 'rates' | 'users' | 'audit'>('rates');
+
+  if (isLoading) {
+    return (
+      <div className="py-24 text-center">
+        <div className="w-8 h-8 border-2 border-cohere-near-black border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-xs font-mono text-cohere-muted-slate">Loading system settings...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="py-16 text-center max-w-md mx-auto space-y-4">
+        <h2 className="text-xl font-bold font-display text-cohere-ink">Sign In Required</h2>
+        <p className="text-xs text-cohere-slate">Please sign in with your admin account to access settings.</p>
+        <Link href="/login" className="inline-flex items-center gap-2 px-5 py-2 rounded-pill bg-cohere-near-black text-white text-xs font-semibold">
+          <LogIn className="w-3.5 h-3.5" />
+          <span>Sign In</span>
+        </Link>
+      </div>
+    );
+  }
 
   const isAdmin = currentUser.role === 'admin';
 
   if (!isAdmin) {
-    const adminUser = profiles.find((p) => p.role === 'admin') || profiles[0];
     return (
       <div className="max-w-xl mx-auto py-16 text-center bg-white p-8 rounded-lg border border-cohere-hairline shadow-sm space-y-4">
         <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
@@ -27,19 +49,6 @@ export default function SettingsPage() {
         <p className="text-xs text-cohere-slate leading-relaxed">
           You are currently signed in as <strong>{currentUser.name}</strong> ({currentUser.role}). Only company founders and administrators can configure categories, default exchange rates, and user roles.
         </p>
-
-        <div className="pt-4 border-t border-cohere-hairline">
-          <p className="text-[11px] font-mono text-cohere-muted-slate mb-3">
-            Testing RLS permissions? Switch to an Admin persona below:
-          </p>
-          <button
-            onClick={() => setCurrentUser(adminUser)}
-            className="inline-flex items-center gap-2 px-5 py-2 rounded-pill bg-cohere-near-black hover:bg-cohere-deep-green text-white text-xs font-semibold font-body transition-colors"
-          >
-            <Shield className="w-3.5 h-3.5" />
-            <span>Switch to {adminUser.name} (Admin)</span>
-          </button>
-        </div>
       </div>
     );
   }

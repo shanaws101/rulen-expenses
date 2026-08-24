@@ -159,27 +159,29 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
         </div>
 
         {/* Submitter info banner */}
-        <div className="px-6 py-3 bg-cohere-soft-stone/70 border-b border-cohere-hairline flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <img
-              src={currentUser.avatar_url || 'https://api.dicebear.com/7.x/initials/svg?seed=' + currentUser.name}
-              alt={currentUser.name}
-              className="w-5 h-5 rounded-full object-cover"
-            />
-            <span className="text-cohere-ink font-medium">
-              Submitting as <strong>{currentUser.name}</strong> ({currentUser.role})
-            </span>
+        {currentUser && (
+          <div className="px-6 py-3 bg-cohere-soft-stone/70 border-b border-cohere-hairline flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <img
+                src={currentUser.avatar_url || 'https://api.dicebear.com/7.x/initials/svg?seed=' + currentUser.name}
+                alt={currentUser.name}
+                className="w-5 h-5 rounded-full object-cover"
+              />
+              <span className="text-cohere-ink font-medium">
+                Submitting as <strong>{currentUser.name}</strong> ({currentUser.role})
+              </span>
+            </div>
+            {currentUser.role === 'admin' ? (
+              <span className="text-[11px] font-mono text-cohere-deep-green flex items-center gap-1 font-semibold">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Auto-Approved
+              </span>
+            ) : (
+              <span className="text-[11px] font-mono text-cohere-slate">
+                Will route to manager for review
+              </span>
+            )}
           </div>
-          {currentUser.role === 'admin' ? (
-            <span className="text-[11px] font-mono text-cohere-deep-green flex items-center gap-1 font-semibold">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Auto-Approved
-            </span>
-          ) : (
-            <span className="text-[11px] font-mono text-cohere-slate">
-              Will route to manager for review
-            </span>
-          )}
-        </div>
+        )}
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">

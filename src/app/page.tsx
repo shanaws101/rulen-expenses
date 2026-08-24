@@ -6,12 +6,52 @@ import { MetricsCards } from '@/components/dashboard/MetricsCards';
 import { SpendCharts } from '@/components/dashboard/SpendCharts';
 import { RecentActivity } from '@/components/dashboard/RecentActivity';
 import { ExpenseFormModal } from '@/components/expenses/ExpenseFormModal';
-import { Plus, ArrowRight, Shield, Layers, CheckCircle2, Clock } from 'lucide-react';
+import { Plus, ArrowRight, Shield, Layers, CheckCircle2, Clock, User, LogIn } from 'lucide-react';
 import Link from 'next/link';
 
 export default function DashboardPage() {
-  const { currentUser, pendingApprovals, scopedExpenses } = useExpenses();
+  const { currentUser, pendingApprovals, isLoading } = useExpenses();
   const [isLogModalOpen, setIsLogModalOpen] = useState(false);
+
+  if (isLoading) {
+    return (
+      <div className="py-24 text-center">
+        <div className="w-8 h-8 border-2 border-cohere-near-black border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+        <p className="text-xs font-mono text-cohere-muted-slate">Loading Supabase Session & Financial State...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="py-16 max-w-2xl mx-auto text-center space-y-6">
+        <div className="flex justify-center">
+          <img src="/logo.png" alt="Rulen Logo" className="h-12 w-auto object-contain" />
+        </div>
+        <div className="space-y-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest text-cohere-slate px-2 py-0.5 rounded bg-cohere-soft-stone border border-cohere-hairline">
+            Internal Operations
+          </span>
+          <h1 className="text-3xl sm:text-4xl font-display font-bold text-cohere-ink tracking-tight">
+            Rulen Expenses Command Center
+          </h1>
+          <p className="text-sm text-cohere-slate max-w-md mx-auto">
+            Sign in with your company credentials or register the founder account to manage budgets, approvals, and multi-currency spend.
+          </p>
+        </div>
+
+        <div className="pt-2">
+          <Link
+            href="/login"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-pill bg-cohere-near-black hover:bg-cohere-deep-green text-white text-xs font-semibold font-body transition-all shadow-sm"
+          >
+            <LogIn className="w-4 h-4" />
+            <span>Sign In to Your Account</span>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

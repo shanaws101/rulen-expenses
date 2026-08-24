@@ -3,85 +3,189 @@
 import React, { useState } from 'react';
 import { useExpenses } from '@/lib/store/expense-context';
 import { useRouter } from 'next/navigation';
-import { Shield, ArrowRight, CheckCircle2, Lock, User } from 'lucide-react';
-import Link from 'next/link';
+import { Role } from '@/lib/types';
+import { Shield, ArrowRight, CheckCircle2, Lock, User, AlertCircle, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { profiles, setCurrentUser, currentUser } = useExpenses();
+  const { signInWithPassword, signUpWithEmail, currentUser } = useExpenses();
+
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [role, setRole] = useState<Role>('admin'); // First user is admin (founder)
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const handleCustomLogin = (e: React.FormEvent) => {
+  // If already logged in, redirect to home
+  React.useEffect(() => {
+    if (currentUser) {
+      router.push('/');
+    }
+  }, [currentUser, router]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMessage(null);
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const match = profiles.find((p) => p.email.toLowerCase() === email.trim().toLowerCase());
-      if (match) {
-        setCurrentUser(match);
-        router.push('/');
+    try {
+      if (mode === 'signin') {
+        const { error: err } = await signInWithPassword(email.trim(), password);
+        if (err) {
+          setError(err.message || 'Invalid email or password. Please check your credentials.');
+        } else {
+          router.push('/');
+        }
       } else {
-        // Allow login as demo user if email unknown
-        setError('No existing demo profile matched that email. Use one of the fast demo personas below.');
-        setIsSubmitting(false);
-      }
-    }, 400);
-  };
+        if (!fullName.trim()) {
+          setError('Please provide your full name.');
+          setIsSubmitting(false);
+          return;
+        }
 
-  const handleSelectPersona = (p: typeof profiles[0]) => {
-    setCurrentUser(p);
-    router.push('/');
+        const { error: err } = await signUpWithEmail(email.trim(), password, fullName.trim(), role);
+        if (err) {
+          setError(err.message || 'Could not register account. Please try again.');
+        } else {
+          setSuccessMessage('Account registered successfully! Signing in...');
+          setTimeout(() => {
+            router.push('/');
+          }, 800);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'An unexpected error occurred.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
-    <div className="min-h-[80vh] flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-[75vh] flex flex-col justify-center py-8 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="w-10 h-10 rounded-sm bg-cohere-near-black text-white flex items-center justify-center font-display font-bold text-lg mx-auto mb-3">
-          R
+        <div className="flex items-center justify-center mb-4">
+          <img
+            src="/logo.png"
+            alt="Rulen Logo"
+            className="h-10 w-auto object-contain"
+          />
         </div>
-        <h2 className="text-2xl sm:text-3xl font-display font-bold text-cohere-ink tracking-tight">
-          Sign in to Rulen Expenses
+        <h2 className="text-2xl font-display font-bold text-cohere-ink tracking-tight">
+          {mode === 'signin' ? 'Sign in to Rulen Expenses' : 'Create Founder / Member Account'}
         </h2>
         <p className="text-xs text-cohere-slate mt-1">
           Remote financial operations, multi-currency ledger & approvals
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-6 shadow-sm rounded-lg border border-cohere-hairline sm:px-8 space-y-6">
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white py-8 px-6 shadow-sm rounded-lg border border-cohere-hairline sm:px-8 space-y-5">
+          {/* Tab toggle */}
+          <div className="flex p-1 bg-cohere-soft-stone rounded-sm border border-cohere-card-border">
+            <button
+              type="button"
+              onClick={() => {
+                setMode('signin');
+                setError(null);
+              }}
+              className={`flex-1 py-1.5 rounded text-xs font-semibold font-body transition-all ${
+                mode === 'signin'
+                  ? 'bg-white text-cohere-ink shadow-sm'
+                  : 'text-cohere-slate hover:text-cohere-ink'
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode('signup');
+                setError(null);
+              }}
+              className={`flex-1 py-1.5 rounded text-xs font-semibold font-body transition-all ${
+                mode === 'signup'
+                  ? 'bg-white text-cohere-ink shadow-sm'
+                  : 'text-cohere-slate hover:text-cohere-ink'
+              }`}
+            >
+              Create Account
+            </button>
+          </div>
+
           {error && (
-            <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-700">
-              {error}
+            <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
-          {/* Email / Password Form */}
-          <form onSubmit={handleCustomLogin} className="space-y-4">
+          {successMessage && (
+            <div className="p-3 rounded bg-cohere-pale-green border border-emerald-200 text-xs text-cohere-deep-green flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+              <span>{successMessage}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === 'signup' && (
+              <>
+                <div>
+                  <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
+                    Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Your Name"
+                    className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs text-cohere-ink focus:outline-none focus:ring-1 focus:ring-black"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
+                    Account Role *
+                  </label>
+                  <select
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as Role)}
+                    className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs text-cohere-ink bg-white focus:outline-none focus:ring-1 focus:ring-black"
+                  >
+                    <option value="admin">Admin / Founder (Full access & approvals)</option>
+                    <option value="manager">Manager (Team approvals)</option>
+                    <option value="employee">Employee (Submissions)</option>
+                  </select>
+                </div>
+              </>
+            )}
+
             <div>
               <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
-                Email Address
+                Email Address *
               </label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="sarah@rulen.co"
+                placeholder="name@rulen.co"
                 className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs text-cohere-ink focus:outline-none focus:ring-1 focus:ring-black"
               />
             </div>
 
             <div>
               <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
-                Password
+                Password *
               </label>
               <input
                 type="password"
                 required
+                minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
@@ -92,42 +196,23 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full py-2.5 rounded-pill bg-cohere-near-black hover:bg-cohere-deep-green text-white text-xs font-semibold font-body transition-colors disabled:opacity-50"
+              className="w-full py-2.5 rounded-pill bg-cohere-near-black hover:bg-cohere-deep-green text-white text-xs font-semibold font-body transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {isSubmitting ? 'Authenticating...' : 'Sign In with Supabase Auth'}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Processing...</span>
+                </>
+              ) : mode === 'signin' ? (
+                <span>Sign In</span>
+              ) : (
+                <span>Register Account</span>
+              )}
             </button>
           </form>
 
-          {/* Persona Demo Fast-Launch */}
-          <div className="pt-4 border-t border-cohere-hairline">
-            <div className="text-[10px] font-mono uppercase text-cohere-muted-slate text-center mb-3 tracking-wider">
-              Or Fast-Sign In As A Persona (RLS Test)
-            </div>
-
-            <div className="space-y-2">
-              {profiles.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => handleSelectPersona(p)}
-                  className="w-full flex items-center justify-between p-2.5 rounded border border-cohere-hairline hover:border-cohere-near-black hover:bg-cohere-soft-stone/50 transition-all text-left"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <img
-                      src={p.avatar_url || 'https://api.dicebear.com/7.x/initials/svg?seed=' + p.name}
-                      alt={p.name}
-                      className="w-6 h-6 rounded-full object-cover"
-                    />
-                    <div>
-                      <div className="text-xs font-semibold text-cohere-ink">{p.name}</div>
-                      <div className="text-[10px] font-mono text-cohere-muted-slate">{p.email}</div>
-                    </div>
-                  </div>
-                  <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-cohere-soft-stone text-cohere-slate">
-                    {p.role}
-                  </span>
-                </button>
-              ))}
-            </div>
+          <div className="pt-2 text-center text-[11px] text-cohere-muted-slate font-mono">
+            Powered by Supabase Authentication & RLS Security
           </div>
         </div>
       </div>

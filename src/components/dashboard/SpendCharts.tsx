@@ -120,7 +120,7 @@ export function SpendCharts() {
         <div className="flex items-center justify-between pb-4 border-b border-cohere-hairline">
           <div>
             <div className="text-[10px] font-mono uppercase text-cohere-muted-slate tracking-wider">
-              {currentUser.role === 'admin' ? 'Company Team' : 'Managed Team'}
+              {currentUser?.role === 'admin' ? 'Company Team' : 'Managed Team'}
             </div>
             <h3 className="text-base font-semibold text-cohere-ink font-display flex items-center gap-2">
               <Users className="w-4 h-4 text-cohere-slate" /> Spend by Person
@@ -153,7 +153,7 @@ export function SpendCharts() {
                     <div>
                       <div className="text-xs font-semibold text-cohere-ink flex items-center gap-1.5">
                         {name}
-                        {item.profile?.id === currentUser.id && (
+                        {currentUser && item.profile?.id === currentUser.id && (
                           <span className="text-[10px] font-mono uppercase px-1 rounded bg-cohere-soft-stone text-cohere-slate">
                             You
                           </span>

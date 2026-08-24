@@ -120,7 +120,7 @@ export function ReportsFilter({
         </div>
 
         {/* Submitter (Admin/Manager only) */}
-        {currentUser.role !== 'employee' && (
+        {currentUser && currentUser.role !== 'employee' && (
           <div>
             <label className="block text-[10px] font-mono uppercase text-cohere-slate mb-1">
               Submitter
