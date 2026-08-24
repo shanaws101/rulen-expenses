@@ -75,7 +75,7 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
     { label: 'Contractor Bill', url: 'https://images.unsplash.com/photo-1450133064473-71024230f91b?w=800&auto=format&fit=crop&q=80' },
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -97,7 +97,7 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
     try {
       if (initialExpense) {
         if (initialExpense.status === 'rejected') {
-          resubmitExpense(initialExpense.id, {
+          await resubmitExpense(initialExpense.id, {
             amount: numericAmount,
             currency,
             exchange_rate: currency === 'USD' ? numericRate : 1,
@@ -107,7 +107,7 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
             receipt_url: receiptUrl,
           });
         } else {
-          updateExpense(initialExpense.id, {
+          await updateExpense(initialExpense.id, {
             amount: numericAmount,
             currency,
             exchange_rate: currency === 'USD' ? numericRate : 1,
@@ -118,7 +118,7 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
           });
         }
       } else {
-        addExpense({
+        const created = await addExpense({
           amount: numericAmount,
           currency,
           exchange_rate: currency === 'USD' ? numericRate : 1,
@@ -127,11 +127,16 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
           expense_date: expenseDate,
           receipt_url: receiptUrl,
         });
+
+        if (!created) {
+          throw new Error('Could not register expense in Supabase. Please ensure you are logged in.');
+        }
       }
 
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Failed to save expense entry.');
+      console.error('Expense form submission error:', err);
+      setError(err.message || 'Failed to save expense entry. Please check your Supabase connection.');
     } finally {
       setIsSubmitting(false);
     }

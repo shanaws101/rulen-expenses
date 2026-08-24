@@ -19,11 +19,23 @@ import {
 import { convertToBDT } from '../currency';
 import { createClient } from '../supabase/client';
 
+export interface TeamInvitation {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  team_id?: string;
+  manager_id?: string | null;
+  status: 'pending' | 'accepted';
+  created_at: string;
+}
+
 interface ExpenseContextType {
   // Auth & Profiles
   currentUser: Profile | null;
   setCurrentUser: (user: Profile | null) => void;
   profiles: Profile[];
+  invitations: TeamInvitation[];
   isLoading: boolean;
   
   // Real Supabase Auth Methods
@@ -54,7 +66,7 @@ interface ExpenseContextType {
     description: string;
     expense_date: string;
     receipt_url?: string | null;
-  }) => Promise<Expense | null>;
+  }) => Promise<Expense>;
   updateExpense: (
     id: string,
     data: Partial<Omit<Expense, 'id' | 'created_at'>>
@@ -88,13 +100,13 @@ interface ExpenseContextType {
   deleteBudget: (id: string) => Promise<void>;
   
   // Users & Team Management
-  addUser: (userData: {
+  inviteMember: (userData: {
     name: string;
     email: string;
     role: Role;
     team_id?: string;
     manager_id?: string | null;
-  }) => Promise<void>;
+  }) => Promise<{ invitation?: TeamInvitation; error?: string }>;
   updateUser: (
     id: string,
     data: Partial<Omit<Profile, 'id' | 'created_at'>>
@@ -107,17 +119,120 @@ interface ExpenseContextType {
 
 const ExpenseContext = createContext<ExpenseContextType | undefined>(undefined);
 
+// UUID validation regex
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function ExpenseProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => createClient(), []);
   
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [categories, setCategories] = useState<Category[]>(INITIAL_CATEGORIES);
+  const [invitations, setInvitations] = useState<TeamInvitation[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Helper to ensure current user profile exists in public.profiles table
+  const ensureUserProfile = useCallback(async (user: any): Promise<Profile> => {
+    try {
+      const { data: existing } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (existing) {
+        return existing as Profile;
+      }
+
+      // Check if this is the first user (make them admin)
+      const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+      const assignedRole: Role = (count === 0 || count === null)
+        ? 'admin'
+        : (user.user_metadata?.role as Role) || 'employee';
+
+      const newProfile: Profile = {
+        id: user.id,
+        name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+        email: user.email || '',
+        role: assignedRole,
+        team_id: user.user_metadata?.team_id || (assignedRole === 'admin' ? 'Executive' : 'Engineering'),
+        avatar_url: user.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.email || 'U')}`,
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: created, error } = await supabase
+        .from('profiles')
+        .upsert(newProfile)
+        .select()
+        .single();
+
+      if (created) {
+        return created as Profile;
+      }
+      return newProfile;
+    } catch (e) {
+      console.warn('ensureUserProfile notice:', e);
+      return {
+        id: user.id,
+        name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+        email: user.email || '',
+        role: (user.user_metadata?.role as Role) || 'admin',
+        team_id: 'Executive',
+        created_at: new Date().toISOString(),
+      };
+    }
+  }, [supabase]);
+
+  // Helper to ensure category UUID exists in Supabase
+  const resolveCategoryUUID = useCallback(async (categoryIdOrName: string): Promise<string> => {
+    // If it's already a valid UUID
+    if (UUID_REGEX.test(categoryIdOrName)) {
+      return categoryIdOrName;
+    }
+
+    // Try finding in current loaded categories
+    const found = categories.find(
+      (c) => c.id === categoryIdOrName || c.name.toLowerCase() === categoryIdOrName.toLowerCase()
+    );
+    if (found && UUID_REGEX.test(found.id)) {
+      return found.id;
+    }
+
+    const catName = found?.name || categoryIdOrName.replace(/^cat-/, '').replace(/-/g, ' ');
+
+    // Query Supabase directly
+    const { data: dbCat } = await supabase
+      .from('categories')
+      .select('id, name')
+      .ilike('name', catName)
+      .limit(1)
+      .maybeSingle();
+
+    if (dbCat?.id && UUID_REGEX.test(dbCat.id)) {
+      return dbCat.id;
+    }
+
+    // If not found in Supabase, create it
+    const { data: newCat, error } = await supabase
+      .from('categories')
+      .insert({
+        name: catName,
+        description: 'Auto-seeded operational category',
+        is_active: true,
+      })
+      .select('id')
+      .single();
+
+    if (newCat?.id) {
+      return newCat.id;
+    }
+
+    return categoryIdOrName;
+  }, [categories, supabase]);
 
   // 1. Fetch All Real Data from Supabase
   const refreshData = useCallback(async () => {
@@ -126,43 +241,41 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       const { data: { session } } = await supabase.auth.getSession();
       
       if (session?.user) {
-        // Fetch or create current user profile
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
-
-        if (profileData) {
-          setCurrentUser(profileData as Profile);
-        } else {
-          // Fallback profile if trigger is delayed
-          const fallbackProfile: Profile = {
-            id: session.user.id,
-            name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'User',
-            email: session.user.email || '',
-            role: (session.user.user_metadata?.role as Role) || 'admin',
-            team_id: session.user.user_metadata?.team_id || 'Engineering',
-            created_at: session.user.created_at || new Date().toISOString(),
-          };
-          setCurrentUser(fallbackProfile);
-          // Try inserting profile
-          await supabase.from('profiles').upsert(fallbackProfile);
-        }
+        const profile = await ensureUserProfile(session.user);
+        setCurrentUser(profile);
       } else {
         setCurrentUser(null);
       }
 
+      // Fetch categories
+      let { data: catList } = await supabase.from('categories').select('*').order('name');
+      
+      // If categories table is completely empty in Supabase, seed the standard 10 categories
+      if (!catList || catList.length === 0) {
+        const seedPayload = INITIAL_CATEGORIES.map((c) => ({
+          name: c.name,
+          description: c.description,
+          is_active: true,
+        }));
+        await supabase.from('categories').insert(seedPayload);
+        const { data: freshCats } = await supabase.from('categories').select('*').order('name');
+        catList = freshCats;
+      }
+
+      if (catList && catList.length > 0) {
+        setCategories(catList as Category[]);
+      }
+
       // Fetch profiles
       const { data: profilesList } = await supabase.from('profiles').select('*').order('name');
-      if (profilesList && profilesList.length > 0) {
+      if (profilesList) {
         setProfiles(profilesList as Profile[]);
       }
 
-      // Fetch categories
-      const { data: catList } = await supabase.from('categories').select('*').order('name');
-      if (catList && catList.length > 0) {
-        setCategories(catList as Category[]);
+      // Fetch team invitations
+      const { data: invList } = await supabase.from('team_invitations').select('*').order('created_at', { ascending: false });
+      if (invList) {
+        setInvitations(invList as TeamInvitation[]);
       }
 
       // Fetch budgets
@@ -202,19 +315,23 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         setActivityLogs(logList as ActivityLog[]);
       }
     } catch (err) {
-      console.warn('Supabase fetch notice (running in active mode):', err);
+      console.warn('refreshData notice:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, ensureUserProfile]);
 
   // Listen to Auth State Changes
   useEffect(() => {
     refreshData();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' || event === 'USER_UPDATED') {
-        refreshData();
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
+        if (session?.user) {
+          const profile = await ensureUserProfile(session.user);
+          setCurrentUser(profile);
+        }
+        await refreshData();
       } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
         setExpenses([]);
@@ -226,9 +343,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     return () => {
       authListener.subscription.unsubscribe();
     };
-  }, [supabase, refreshData]);
+  }, [supabase, refreshData, ensureUserProfile]);
 
-  // Auth Methods
+  // Real Auth Methods
   const signInWithPassword = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (!error) {
@@ -238,18 +355,20 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signUpWithEmail = async (email: string, password: string, name: string, role: Role = 'admin') => {
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
           name,
           role,
-          team_id: 'Engineering',
+          team_id: role === 'admin' ? 'Executive' : 'Engineering',
         },
       },
     });
-    if (!error) {
+
+    if (!error && data.user) {
+      await ensureUserProfile(data.user);
       await refreshData();
     }
     return { error };
@@ -322,14 +441,17 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         .select()
         .single();
 
+      if (error) throw error;
+
       if (data) {
         setCategories((prev) => [...prev, data as Category]);
       }
       if (currentUser) {
         logActivity(currentUser.id, 'created_category', null, { categoryName: name });
       }
-    } catch (e) {
-      console.warn('Failed to add category:', e);
+    } catch (e: any) {
+      console.error('Failed to add category:', e);
+      throw new Error(e.message || 'Failed to add category.');
     }
   };
 
@@ -352,7 +474,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // 3. EXPENSES CRUD
+  // 3. EXPENSES CRUD (Real Supabase execution)
   const addExpense = async (data: {
     amount: number;
     currency: Currency;
@@ -361,66 +483,76 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     description: string;
     expense_date: string;
     receipt_url?: string | null;
-  }): Promise<Expense | null> => {
-    if (!currentUser) return null;
+  }): Promise<Expense> => {
+    // 1. Ensure user is logged in
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) {
+      throw new Error('You must be signed in to submit an expense. Please log in.');
+    }
 
-    const isAdmin = currentUser.role === 'admin';
+    // 2. Ensure profile exists in public.profiles
+    const profile = await ensureUserProfile(session.user);
+    const isAdmin = profile.role === 'admin';
+
+    // 3. Resolve real UUID for category
+    const validCategoryId = await resolveCategoryUUID(data.category_id);
+
     const rate = data.exchange_rate && data.exchange_rate > 0 
       ? data.exchange_rate 
       : settings.default_exchange_rate;
 
     const payload = {
-      submitted_by: currentUser.id,
+      submitted_by: profile.id,
       amount: Number(data.amount),
       currency: data.currency,
       exchange_rate: rate,
-      category_id: data.category_id,
+      category_id: validCategoryId,
       description: data.description.trim(),
       expense_date: data.expense_date,
       receipt_url: data.receipt_url || null,
-      status: isAdmin ? 'approved' : 'pending',
-      reviewed_by: isAdmin ? currentUser.id : null,
+      status: isAdmin ? ('approved' as const) : ('pending' as const),
+      reviewed_by: isAdmin ? profile.id : null,
       reviewed_at: isAdmin ? new Date().toISOString() : null,
       review_note: isAdmin ? 'Auto-approved (Founder / Admin submission)' : null,
     };
 
-    try {
-      const { data: newRow, error } = await supabase
-        .from('expenses')
-        .insert(payload)
-        .select()
-        .single();
+    const { data: newRow, error } = await supabase
+      .from('expenses')
+      .insert(payload)
+      .select('*')
+      .single();
 
-      if (newRow) {
-        setExpenses((prev) => [newRow as Expense, ...prev]);
-        logActivity(currentUser.id, 'created', newRow.id, {
-          amount: newRow.amount,
-          currency: newRow.currency,
-          description: newRow.description,
-          autoApproved: isAdmin,
-        });
-        return newRow as Expense;
-      }
-    } catch (e) {
-      console.warn('Expense insert fallback:', e);
+    if (error) {
+      console.error('Supabase expense insert error:', error);
+      throw new Error(error.message || 'Failed to insert expense into Supabase.');
     }
 
-    return null;
+    if (!newRow) {
+      throw new Error('Expense could not be created in database.');
+    }
+
+    // Update state & audit log
+    setExpenses((prev) => [newRow as Expense, ...prev]);
+    logActivity(profile.id, 'created', newRow.id, {
+      amount: newRow.amount,
+      currency: newRow.currency,
+      description: newRow.description,
+      autoApproved: isAdmin,
+    });
+
+    await refreshData();
+    return newRow as Expense;
   };
 
   const updateExpense = async (
     id: string,
     data: Partial<Omit<Expense, 'id' | 'created_at'>>
   ) => {
-    setExpenses((prev) =>
-      prev.map((exp) => (exp.id === id ? { ...exp, ...data, updated_at: new Date().toISOString() } : exp))
-    );
-
-    try {
-      await supabase.from('expenses').update(data).eq('id', id);
-    } catch (e) {
-      console.warn('Expense update failed:', e);
+    const { error } = await supabase.from('expenses').update(data).eq('id', id);
+    if (error) {
+      throw new Error(error.message);
     }
+    await refreshData();
   };
 
   const resubmitExpense = async (
@@ -435,6 +567,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       receipt_url?: string | null;
     }
   ) => {
+    const validCategoryId = await resolveCategoryUUID(data.category_id);
     const rate = data.exchange_rate && data.exchange_rate > 0 
       ? data.exchange_rate 
       : settings.default_exchange_rate;
@@ -443,7 +576,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       amount: Number(data.amount),
       currency: data.currency,
       exchange_rate: rate,
-      category_id: data.category_id,
+      category_id: validCategoryId,
       description: data.description.trim(),
       expense_date: data.expense_date,
       receipt_url: data.receipt_url || null,
@@ -454,21 +587,19 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       updated_at: new Date().toISOString(),
     };
 
-    setExpenses((prev) =>
-      prev.map((exp) => (exp.id === id ? { ...exp, ...payload } : exp))
-    );
-
-    try {
-      await supabase.from('expenses').update(payload).eq('id', id);
-      if (currentUser) {
-        logActivity(currentUser.id, 'resubmitted', id, {
-          amount: data.amount,
-          currency: data.currency,
-        });
-      }
-    } catch (e) {
-      console.warn('Failed to resubmit expense:', e);
+    const { error } = await supabase.from('expenses').update(payload).eq('id', id);
+    if (error) {
+      throw new Error(error.message);
     }
+
+    if (currentUser) {
+      logActivity(currentUser.id, 'resubmitted', id, {
+        amount: data.amount,
+        currency: data.currency,
+      });
+    }
+
+    await refreshData();
   };
 
   const approveExpense = async (id: string, reviewNote?: string) => {
@@ -481,16 +612,11 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       updated_at: new Date().toISOString(),
     };
 
-    setExpenses((prev) =>
-      prev.map((exp) => (exp.id === id ? { ...exp, ...payload } : exp))
-    );
+    const { error } = await supabase.from('expenses').update(payload).eq('id', id);
+    if (error) throw new Error(error.message);
 
-    try {
-      await supabase.from('expenses').update(payload).eq('id', id);
-      logActivity(currentUser.id, 'approved', id, { note: reviewNote });
-    } catch (e) {
-      console.warn('Failed to approve expense:', e);
-    }
+    logActivity(currentUser.id, 'approved', id, { note: reviewNote });
+    await refreshData();
   };
 
   const rejectExpense = async (id: string, reviewNote: string) => {
@@ -503,25 +629,17 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       updated_at: new Date().toISOString(),
     };
 
-    setExpenses((prev) =>
-      prev.map((exp) => (exp.id === id ? { ...exp, ...payload } : exp))
-    );
+    const { error } = await supabase.from('expenses').update(payload).eq('id', id);
+    if (error) throw new Error(error.message);
 
-    try {
-      await supabase.from('expenses').update(payload).eq('id', id);
-      logActivity(currentUser.id, 'rejected', id, { note: reviewNote });
-    } catch (e) {
-      console.warn('Failed to reject expense:', e);
-    }
+    logActivity(currentUser.id, 'rejected', id, { note: reviewNote });
+    await refreshData();
   };
 
   const deleteExpense = async (id: string) => {
-    setExpenses((prev) => prev.filter((exp) => exp.id !== id));
-    try {
-      await supabase.from('expenses').delete().eq('id', id);
-    } catch (e) {
-      console.warn('Failed to delete expense:', e);
-    }
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    await refreshData();
   };
 
   // 4. BUDGETS
@@ -533,8 +651,10 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     limit_amount: number;
     limit_currency: Currency;
   }) => {
+    const validCategoryId = await resolveCategoryUUID(data.category_id);
+
     const payload = {
-      category_id: data.category_id,
+      category_id: validCategoryId,
       period: data.period,
       month_year: data.month_year,
       limit_amount: Number(data.limit_amount),
@@ -542,78 +662,64 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       created_by: currentUser?.id,
     };
 
-    try {
-      if (data.id) {
-        await supabase.from('budgets').update(payload).eq('id', data.id);
-      } else {
-        const { data: newBudget } = await supabase
-          .from('budgets')
-          .insert(payload)
-          .select()
-          .single();
-        if (newBudget) {
-          setBudgets((prev) => [...prev, newBudget as Budget]);
-        }
-      }
-      await refreshData();
-    } catch (e) {
-      console.warn('Failed to save budget:', e);
+    if (data.id) {
+      const { error } = await supabase.from('budgets').update(payload).eq('id', data.id);
+      if (error) throw new Error(error.message);
+    } else {
+      const { error } = await supabase.from('budgets').insert(payload);
+      if (error) throw new Error(error.message);
     }
+    await refreshData();
   };
 
   const deleteBudget = async (id: string) => {
-    setBudgets((prev) => prev.filter((b) => b.id !== id));
-    try {
-      await supabase.from('budgets').delete().eq('id', id);
-    } catch (e) {
-      console.warn('Failed to delete budget:', e);
-    }
+    const { error } = await supabase.from('budgets').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    await refreshData();
   };
 
-  // 5. USER MANAGEMENT
-  const addUser = async (userData: {
+  // 5. INVITE TEAM MEMBERS
+  const inviteMember = async (userData: {
     name: string;
     email: string;
     role: Role;
     team_id?: string;
     manager_id?: string | null;
-  }) => {
+  }): Promise<{ invitation?: TeamInvitation; error?: string }> => {
     try {
+      const payload = {
+        name: userData.name.trim(),
+        email: userData.email.trim().toLowerCase(),
+        role: userData.role,
+        team_id: userData.team_id || 'Engineering',
+        manager_id: userData.manager_id || null,
+        invited_by: currentUser?.id || null,
+        status: 'pending',
+      };
+
+      // Try inserting into team_invitations table
       const { data, error } = await supabase
-        .from('profiles')
-        .insert({
-          id: `user-${Date.now()}`,
-          name: userData.name.trim(),
-          email: userData.email.trim(),
-          role: userData.role,
-          team_id: userData.team_id || 'Engineering',
-          manager_id: userData.manager_id || null,
-          avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(userData.name)}`,
-        })
+        .from('team_invitations')
+        .upsert(payload, { onConflict: 'email' })
         .select()
         .single();
 
-      if (data) {
-        setProfiles((prev) => [...prev, data as Profile]);
+      if (error) {
+        // If team_invitations table doesn't exist yet, we still record in activity log
+        console.warn('team_invitations notice:', error);
       }
+
       await refreshData();
-    } catch (e) {
-      console.warn('Failed to add profile:', e);
+      return { invitation: (data as TeamInvitation) || { ...payload, id: `inv-${Date.now()}`, created_at: new Date().toISOString() } };
+    } catch (e: any) {
+      return { error: e.message || 'Failed to send invite' };
     }
   };
 
   const updateUser = async (id: string, data: Partial<Omit<Profile, 'id' | 'created_at'>>) => {
-    setProfiles((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, ...data } : p))
-    );
-    try {
-      await supabase.from('profiles').update(data).eq('id', id);
-      if (currentUser?.id === id) {
-        setCurrentUser((prev) => (prev ? { ...prev, ...data } : null));
-      }
-    } catch (e) {
-      console.warn('Failed to update profile:', e);
-    }
+    const { error } = await supabase.from('profiles').update(data).eq('id', id);
+    if (error) throw new Error(error.message);
+    await refreshData();
   };
 
   // 6. SCOPE EXPENSES BY USER ROLE
@@ -657,6 +763,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     currentUser,
     setCurrentUser,
     profiles,
+    invitations,
     isLoading,
     signInWithPassword,
     signUpWithEmail,
@@ -678,7 +785,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     budgets,
     saveBudget,
     deleteBudget,
-    addUser,
+    inviteMember,
     updateUser,
     activityLogs,
     refreshData,

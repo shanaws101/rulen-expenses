@@ -297,21 +297,86 @@ begin
   if user_count = 0 then
     assigned_role := 'admin';
   else
+-- ----------------------------------------------------------------------------
+-- 7. TEAM INVITATIONS TABLE
+-- ----------------------------------------------------------------------------
+create table if not exists public.team_invitations (
+  id uuid primary key default gen_random_uuid(),
+  email text not null unique,
+  name text not null,
+  role text not null check (role in ('admin', 'manager', 'employee')),
+  team_id text default 'Engineering',
+  manager_id uuid references public.profiles(id) on delete set null,
+  invited_by uuid references public.profiles(id) on delete set null,
+  status text not null default 'pending' check (status in ('pending', 'accepted')),
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+alter table public.team_invitations enable row level security;
+
+create policy "Admins can manage team invitations"
+  on public.team_invitations for all
+  using (public.is_admin());
+
+create policy "Anyone can read invitation by email"
+  on public.team_invitations for select
+  using (true);
+
+-- ----------------------------------------------------------------------------
+-- AUTOMATIC PROFILE CREATION TRIGGER ON AUTH.USERS
+-- ----------------------------------------------------------------------------
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+as $$
+declare
+  user_count int;
+  assigned_role text;
+  assigned_name text;
+  assigned_team text;
+  assigned_manager uuid;
+  inv_record record;
+begin
+  select count(*) into user_count from public.profiles;
+
+  -- Check if user was pre-invited
+  select * into inv_record from public.team_invitations where lower(email) = lower(new.email) limit 1;
+
+  if inv_record.email is not null then
+    assigned_role := inv_record.role;
+    assigned_name := inv_record.name;
+    assigned_team := inv_record.team_id;
+    assigned_manager := inv_record.manager_id;
+    update public.team_invitations set status = 'accepted' where id = inv_record.id;
+  elsif user_count = 0 or user_count is null then
+    -- First user is Founder / Admin
+    assigned_role := 'admin';
+    assigned_name := coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1));
+    assigned_team := 'Executive';
+    assigned_manager := null;
+  else
     assigned_role := coalesce(new.raw_user_meta_data->>'role', 'employee');
+    assigned_name := coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1));
+    assigned_team := coalesce(new.raw_user_meta_data->>'team_id', 'Engineering');
+    assigned_manager := null;
   end if;
 
-  insert into public.profiles (id, name, email, role, team_id, avatar_url)
+  insert into public.profiles (id, name, email, role, team_id, manager_id, avatar_url)
   values (
     new.id,
-    coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+    assigned_name,
     new.email,
     assigned_role,
-    coalesce(new.raw_user_meta_data->>'team_id', 'Engineering'),
+    assigned_team,
+    assigned_manager,
     coalesce(new.raw_user_meta_data->>'avatar_url', 'https://api.dicebear.com/7.x/initials/svg?seed=' || encode(new.email::bytea, 'hex'))
   )
   on conflict (id) do update set
     name = excluded.name,
-    email = excluded.email;
+    email = excluded.email,
+    role = excluded.role,
+    team_id = excluded.team_id;
 
   return new;
 end;
