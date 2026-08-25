@@ -11,11 +11,27 @@ import {
   Role,
   Currency,
   ExpenseWithDetails,
+  Account,
+  JournalEntry,
+  JournalLine,
+  CapitalContribution,
+  RecurringItem,
+  AccountingBasis,
+  JournalSourceType,
+  ContributionMethod,
+  PaymentStatus,
 } from '../types';
 import {
   INITIAL_CATEGORIES,
   INITIAL_SETTINGS,
 } from './initial-data';
+import {
+  INITIAL_ACCOUNTS,
+  generateCapitalContributionJournalEntry,
+  generateExpenseApprovalJournalEntry,
+  generateExpenseSettlementJournalEntry,
+  verifyJournalBalance,
+} from '../accounting';
 import { convertToBDT } from '../currency';
 import { createClient } from '../supabase/client';
 
@@ -43,19 +59,22 @@ interface ExpenseContextType {
   signUpWithEmail: (email: string, password: string, name: string, role?: Role) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
   
-  // Settings & Currency
+  // Settings & Basis
   settings: AppSettings;
   updateExchangeRate: (newRate: number) => Promise<void>;
+  accountingBasis: AccountingBasis;
+  setAccountingBasis: (basis: AccountingBasis) => void;
   
   // Categories
   categories: Category[];
   addCategory: (name: string, description?: string) => Promise<void>;
   toggleCategoryActive: (categoryId: string) => Promise<void>;
   
-  // Expenses & Scoping
+  // Expenses & Payables
   allExpenses: Expense[];
   scopedExpenses: ExpenseWithDetails[];
   pendingApprovals: ExpenseWithDetails[];
+  unpaidPayables: ExpenseWithDetails[];
   
   // Expense Actions
   addExpense: (data: {
@@ -66,6 +85,9 @@ interface ExpenseContextType {
     description: string;
     expense_date: string;
     receipt_url?: string | null;
+    payment_status?: PaymentStatus;
+    due_date?: string | null;
+    paid_date?: string | null;
   }) => Promise<Expense>;
   updateExpense: (
     id: string,
@@ -81,11 +103,62 @@ interface ExpenseContextType {
       description: string;
       expense_date: string;
       receipt_url?: string | null;
+      payment_status?: PaymentStatus;
+      due_date?: string | null;
     }
   ) => Promise<void>;
   approveExpense: (id: string, reviewNote?: string) => Promise<void>;
   rejectExpense: (id: string, reviewNote: string) => Promise<void>;
+  markExpenseAsPaid: (expenseId: string, paidDate?: string) => Promise<void>;
   deleteExpense: (id: string) => Promise<void>;
+  
+  // Chart of Accounts & General Ledger
+  accounts: Account[];
+  addAccount: (data: {
+    code?: string;
+    name: string;
+    type: Account['type'];
+    parent_id?: string | null;
+    description?: string;
+  }) => Promise<Account>;
+  updateAccount: (id: string, data: Partial<Account>) => Promise<void>;
+  journalEntries: JournalEntry[];
+  addJournalEntry: (entry: {
+    entry_date: string;
+    settled_date?: string | null;
+    description: string;
+    source_type?: JournalSourceType;
+    source_id?: string | null;
+    lines: {
+      account_id: string;
+      debit_amount: number;
+      credit_amount: number;
+      currency: Currency;
+      exchange_rate?: number;
+      debit_bdt?: number;
+      credit_bdt?: number;
+    }[];
+  }) => Promise<JournalEntry>;
+  
+  // Capital Contributions
+  capitalContributions: CapitalContribution[];
+  addCapitalContribution: (data: {
+    amount: number;
+    currency: Currency;
+    exchange_rate?: number;
+    contribution_date: string;
+    settled_date?: string;
+    method: ContributionMethod;
+    note?: string;
+    founder_account_id?: string;
+    contributed_by: string;
+  }) => Promise<CapitalContribution>;
+  
+  // Recurring Items & Subscriptions
+  recurringItems: RecurringItem[];
+  addRecurringItem: (item: Omit<RecurringItem, 'id' | 'created_at'>) => Promise<RecurringItem>;
+  updateRecurringItem: (id: string, item: Partial<RecurringItem>) => Promise<void>;
+  deleteRecurringItem: (id: string) => Promise<void>;
   
   // Budgets
   budgets: Budget[];
@@ -129,14 +202,18 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>(INITIAL_ACCOUNTS);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
+  const [capitalContributions, setCapitalContributions] = useState<CapitalContribution[]>([]);
+  const [recurringItems, setRecurringItems] = useState<RecurringItem[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(INITIAL_SETTINGS);
+  const [accountingBasis, setAccountingBasis] = useState<AccountingBasis>('accrual');
   const [isLoading, setIsLoading] = useState(true);
 
   // Helper to ensure current user profile exists in database
   const ensureUserProfile = useCallback(async (user: any): Promise<Profile> => {
     try {
-      // 1. Check local DB table
       const { data: existing } = await supabase
         .from('profiles')
         .select('*')
@@ -147,7 +224,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         return existing as Profile;
       }
 
-      // 2. Sync via API route to guarantee server-side insertion
       const res = await fetch('/api/sync-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -229,7 +305,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     return categoryIdOrName;
   }, [categories, supabase]);
 
-  // 1. Fetch All Real Data from Supabase
+  // 1. Fetch All Real Data from Supabase & Accounting API
   const refreshData = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -241,9 +317,8 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         setCurrentUser(null);
       }
 
-      // Fetch categories
+      // Fetch Categories
       let { data: catList } = await supabase.from('categories').select('*').order('name');
-      
       if (!catList || catList.length === 0) {
         const seedPayload = INITIAL_CATEGORIES.map((c) => ({
           name: c.name,
@@ -254,39 +329,63 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         const { data: freshCats } = await supabase.from('categories').select('*').order('name');
         catList = freshCats;
       }
-
       if (catList && catList.length > 0) {
         setCategories(catList as Category[]);
       }
 
-      // Fetch profiles
+      // Fetch Profiles
       const { data: profilesList } = await supabase.from('profiles').select('*').order('name');
       if (profilesList) {
         setProfiles(profilesList as Profile[]);
       }
 
-      // Fetch team invitations
+      // Fetch Team Invitations
       const { data: invList } = await supabase.from('team_invitations').select('*').order('created_at', { ascending: false });
       if (invList) {
         setInvitations(invList as TeamInvitation[]);
       }
 
-      // Fetch budgets
+      // Fetch Budgets
       const { data: budgetList } = await supabase.from('budgets').select('*');
       if (budgetList) {
         setBudgets(budgetList as Budget[]);
       }
 
-      // Fetch expenses
+      // Fetch Expenses
       const { data: expList } = await supabase
         .from('expenses')
         .select('*')
         .order('expense_date', { ascending: false });
       if (expList) {
-        setExpenses(expList as Expense[]);
+        setExpenses(
+          expList.map((e) => ({
+            ...e,
+            payment_status: e.payment_status || 'paid',
+          })) as Expense[]
+        );
       }
 
-      // Fetch settings
+      // Fetch Accounting Data (Accounts, Journal Entries, Contributions, Recurring Items)
+      try {
+        const accRes = await fetch('/api/accounting');
+        const accData = await accRes.json();
+        if (accData.accounts && accData.accounts.length > 0) {
+          setAccounts(accData.accounts);
+        }
+        if (accData.journalEntries) {
+          setJournalEntries(accData.journalEntries);
+        }
+        if (accData.contributions) {
+          setCapitalContributions(accData.contributions);
+        }
+        if (accData.recurringItems) {
+          setRecurringItems(accData.recurringItems);
+        }
+      } catch (accErr) {
+        console.warn('Accounting API fetch fallback:', accErr);
+      }
+
+      // Fetch Settings
       const { data: settingsList } = await supabase.from('settings').select('*');
       if (settingsList) {
         const rateRow = settingsList.find((s) => s.key === 'default_exchange_rate');
@@ -298,7 +397,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Fetch activity logs
+      // Fetch Activity Logs
       const { data: logList } = await supabase
         .from('activity_logs')
         .select('*')
@@ -328,6 +427,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         setCurrentUser(null);
         setExpenses([]);
         setBudgets([]);
+        setJournalEntries([]);
+        setCapitalContributions([]);
+        setRecurringItems([]);
         setActivityLogs([]);
       }
     });
@@ -355,7 +457,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         data: {
           name,
           role,
-          team_id: role === 'admin' ? 'Executive' : 'Engineering',
+          team_id: role === 'admin' ? 'Executive' : role === 'accountant' ? 'Finance' : 'Engineering',
         },
       },
     });
@@ -372,7 +474,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     setCurrentUser(null);
   };
 
-  // Helper to log audit activity in Supabase
+  // Helper to log audit activity
   const logActivity = async (
     actorId: string,
     action: ActivityLog['action'],
@@ -458,16 +560,13 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     );
 
     try {
-      await supabase
-        .from('categories')
-        .update({ is_active: nextState })
-        .eq('id', categoryId);
+      await supabase.from('categories').update({ is_active: nextState }).eq('id', categoryId);
     } catch (e) {
       console.warn('Failed to toggle category:', e);
     }
   };
 
-  // 3. EXPENSES CRUD (With Server Fallback & Guaranteed Profile)
+  // 3. EXPENSES CRUD & PAYABLES
   const addExpense = async (data: {
     amount: number;
     currency: Currency;
@@ -476,6 +575,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     description: string;
     expense_date: string;
     receipt_url?: string | null;
+    payment_status?: PaymentStatus;
+    due_date?: string | null;
+    paid_date?: string | null;
   }): Promise<Expense> => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user) {
@@ -486,7 +588,6 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       ? data.exchange_rate 
       : settings.default_exchange_rate;
 
-    // Use /api/expenses endpoint to ensure profile exists and RLS bypass
     const res = await fetch('/api/expenses', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -501,6 +602,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         description: data.description,
         expense_date: data.expense_date,
         receipt_url: data.receipt_url,
+        payment_status: data.payment_status || 'paid',
+        due_date: data.due_date || null,
+        paid_date: data.paid_date || (data.payment_status === 'paid' ? data.expense_date : null),
       }),
     });
 
@@ -520,9 +624,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     data: Partial<Omit<Expense, 'id' | 'created_at'>>
   ) => {
     const { error } = await supabase.from('expenses').update(data).eq('id', id);
-    if (error) {
-      throw new Error(error.message);
-    }
+    if (error) throw new Error(error.message);
     await refreshData();
   };
 
@@ -536,6 +638,8 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       description: string;
       expense_date: string;
       receipt_url?: string | null;
+      payment_status?: PaymentStatus;
+      due_date?: string | null;
     }
   ) => {
     const validCategoryId = await resolveCategoryUUID(data.category_id);
@@ -551,6 +655,8 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
       description: data.description.trim(),
       expense_date: data.expense_date,
       receipt_url: data.receipt_url || null,
+      payment_status: data.payment_status || 'paid',
+      due_date: data.due_date || null,
       status: 'pending' as const,
       review_note: null,
       reviewed_by: null,
@@ -559,9 +665,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     };
 
     const { error } = await supabase.from('expenses').update(payload).eq('id', id);
-    if (error) {
-      throw new Error(error.message);
-    }
+    if (error) throw new Error(error.message);
 
     if (currentUser) {
       logActivity(currentUser.id, 'resubmitted', id, {
@@ -575,6 +679,9 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
 
   const approveExpense = async (id: string, reviewNote?: string) => {
     if (!currentUser) return;
+    const targetExp = expenses.find((e) => e.id === id);
+    if (!targetExp) return;
+
     const payload = {
       status: 'approved' as const,
       reviewed_by: currentUser.id,
@@ -585,6 +692,27 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
 
     const { error } = await supabase.from('expenses').update(payload).eq('id', id);
     if (error) throw new Error(error.message);
+
+    // Auto-generate balanced double-entry journal entry
+    try {
+      const { entry, lines } = generateExpenseApprovalJournalEntry(
+        { ...targetExp, ...payload },
+        categories,
+        accounts,
+        currentUser.id
+      );
+      await fetch('/api/accounting', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create_journal_entry',
+          ...entry,
+          lines,
+        }),
+      });
+    } catch (jErr) {
+      console.warn('Auto journal generation notice on approval:', jErr);
+    }
 
     logActivity(currentUser.id, 'approved', id, { note: reviewNote });
     await refreshData();
@@ -607,13 +735,217 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     await refreshData();
   };
 
+  const markExpenseAsPaid = async (expenseId: string, paidDate?: string) => {
+    if (!currentUser) return;
+    const effectivePaidDate = paidDate || new Date().toISOString().substring(0, 10);
+
+    const res = await fetch('/api/accounting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'mark_expense_paid',
+        expenseId,
+        paidDate: effectivePaidDate,
+        actorId: currentUser.id,
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to mark expense as paid.');
+    }
+
+    logActivity(currentUser.id, 'marked_paid', expenseId, { paidDate: effectivePaidDate });
+    await refreshData();
+  };
+
   const deleteExpense = async (id: string) => {
     const { error } = await supabase.from('expenses').delete().eq('id', id);
     if (error) throw new Error(error.message);
     await refreshData();
   };
 
-  // 4. BUDGETS
+  // 4. CHART OF ACCOUNTS & GENERAL LEDGER
+  const addAccount = async (data: {
+    code?: string;
+    name: string;
+    type: Account['type'];
+    parent_id?: string | null;
+    description?: string;
+  }): Promise<Account> => {
+    const res = await fetch('/api/accounting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create_account',
+        ...data,
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to create account.');
+    }
+
+    const created = json.account as Account;
+    setAccounts((prev) => [...prev, created]);
+    if (currentUser) {
+      logActivity(currentUser.id, 'created_account', null, { accountName: data.name, type: data.type });
+    }
+    await refreshData();
+    return created;
+  };
+
+  const updateAccount = async (id: string, data: Partial<Account>) => {
+    const { error } = await supabase.from('accounts').update(data).eq('id', id);
+    if (error) throw new Error(error.message);
+    await refreshData();
+  };
+
+  const addJournalEntry = async (entry: {
+    entry_date: string;
+    settled_date?: string | null;
+    description: string;
+    source_type?: JournalSourceType;
+    source_id?: string | null;
+    lines: {
+      account_id: string;
+      debit_amount: number;
+      credit_amount: number;
+      currency: Currency;
+      exchange_rate?: number;
+      debit_bdt?: number;
+      credit_bdt?: number;
+    }[];
+  }): Promise<JournalEntry> => {
+    if (!currentUser) throw new Error('You must be signed in to post journal entries.');
+
+    // Calculate BDT amounts
+    const rate = settings.default_exchange_rate || 122.5;
+    const computedLines = entry.lines.map((line) => {
+      const lineRate = line.exchange_rate || rate;
+      const debitBDT = line.debit_bdt ?? (line.currency === 'USD' ? line.debit_amount * lineRate : line.debit_amount);
+      const creditBDT = line.credit_bdt ?? (line.currency === 'USD' ? line.credit_amount * lineRate : line.credit_amount);
+      return {
+        ...line,
+        exchange_rate: lineRate,
+        debit_bdt: debitBDT,
+        credit_bdt: creditBDT,
+      };
+    });
+
+    // Enforce double-entry balance check
+    const balance = verifyJournalBalance(computedLines);
+    if (!balance.isBalanced) {
+      throw new Error(
+        `Journal entry does not balance! Total Debits: ${balance.totalDebits.toFixed(2)} BDT, Total Credits: ${balance.totalCredits.toFixed(2)} BDT (Difference: ${balance.diff.toFixed(2)} BDT). Every entry must balance to zero.`
+      );
+    }
+
+    const res = await fetch('/api/accounting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create_journal_entry',
+        entry_date: entry.entry_date,
+        settled_date: entry.settled_date || null,
+        description: entry.description,
+        created_by: currentUser.id,
+        source_type: entry.source_type || 'manual',
+        source_id: entry.source_id || null,
+        lines: computedLines,
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to save journal entry.');
+    }
+
+    const createdEntry = json.entry as JournalEntry;
+    setJournalEntries((prev) => [createdEntry, ...prev]);
+    logActivity(currentUser.id, 'posted_journal_entry', null, { description: entry.description });
+    await refreshData();
+    return createdEntry;
+  };
+
+  // 5. CAPITAL CONTRIBUTIONS
+  const addCapitalContribution = async (data: {
+    amount: number;
+    currency: Currency;
+    exchange_rate?: number;
+    contribution_date: string;
+    settled_date?: string;
+    method: ContributionMethod;
+    note?: string;
+    founder_account_id?: string;
+    contributed_by: string;
+  }): Promise<CapitalContribution> => {
+    if (!currentUser) throw new Error('You must be signed in.');
+
+    const res = await fetch('/api/accounting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create_contribution',
+        ...data,
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to record capital contribution.');
+    }
+
+    const created = json.contribution as CapitalContribution;
+    setCapitalContributions((prev) => [created, ...prev]);
+    logActivity(currentUser.id, 'recorded_contribution', null, {
+      amount: data.amount,
+      currency: data.currency,
+      contributed_by: data.contributed_by,
+    });
+    await refreshData();
+    return created;
+  };
+
+  // 6. RECURRING ITEMS
+  const addRecurringItem = async (item: Omit<RecurringItem, 'id' | 'created_at'>): Promise<RecurringItem> => {
+    const res = await fetch('/api/accounting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'create_recurring',
+        ...item,
+      }),
+    });
+
+    const json = await res.json();
+    if (!res.ok || json.error) {
+      throw new Error(json.error || 'Failed to create recurring item.');
+    }
+
+    const created = json.recurringItem as RecurringItem;
+    setRecurringItems((prev) => [...prev, created]);
+    if (currentUser) {
+      logActivity(currentUser.id, 'created_recurring', null, { name: item.name });
+    }
+    await refreshData();
+    return created;
+  };
+
+  const updateRecurringItem = async (id: string, item: Partial<RecurringItem>) => {
+    const { error } = await supabase.from('recurring_items').update(item).eq('id', id);
+    if (error) throw new Error(error.message);
+    await refreshData();
+  };
+
+  const deleteRecurringItem = async (id: string) => {
+    const { error } = await supabase.from('recurring_items').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+    await refreshData();
+  };
+
+  // 7. BUDGETS
   const saveBudget = async (data: {
     id?: string;
     category_id: string;
@@ -649,7 +981,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     await refreshData();
   };
 
-  // 5. INVITE TEAM MEMBERS
+  // 8. INVITE TEAM MEMBERS
   const inviteMember = async (userData: {
     name: string;
     email: string;
@@ -662,7 +994,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         name: userData.name.trim(),
         email: userData.email.trim().toLowerCase(),
         role: userData.role,
-        team_id: userData.team_id || 'Engineering',
+        team_id: userData.team_id || (userData.role === 'admin' ? 'Executive' : userData.role === 'accountant' ? 'Finance' : 'Engineering'),
         manager_id: userData.manager_id || null,
         invited_by: currentUser?.id || null,
         status: 'pending',
@@ -691,7 +1023,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     await refreshData();
   };
 
-  // 6. SCOPE EXPENSES BY USER ROLE
+  // 9. SCOPE EXPENSES BY USER ROLE
   const scopedExpenses = useMemo<ExpenseWithDetails[]>(() => {
     if (!currentUser) return [];
     let filtered = expenses;
@@ -704,6 +1036,7 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
         .map((p) => p.id);
       filtered = expenses.filter((e) => managedIds.includes(e.submitted_by));
     }
+    // Admin & Accountant have full visibility into all expenses
 
     return filtered.map((e) => {
       const submitter = profiles.find((p) => p.id === e.submitted_by) || (e.submitted_by === currentUser.id ? currentUser : undefined);
@@ -722,10 +1055,18 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
   }, [expenses, currentUser, profiles, categories]);
 
   const pendingApprovals = useMemo<ExpenseWithDetails[]>(() => {
-    if (!currentUser || currentUser.role === 'employee') {
+    // Accountant cannot approve operational expenses unless they are also Admin
+    if (!currentUser || currentUser.role === 'employee' || currentUser.role === 'accountant') {
       return [];
     }
     return scopedExpenses.filter((e) => e.status === 'pending');
+  }, [scopedExpenses, currentUser]);
+
+  const unpaidPayables = useMemo<ExpenseWithDetails[]>(() => {
+    if (!currentUser) return [];
+    return scopedExpenses.filter(
+      (e) => e.status === 'approved' && e.payment_status === 'unpaid'
+    );
   }, [scopedExpenses, currentUser]);
 
   const value = {
@@ -739,18 +1080,33 @@ export function ExpenseProvider({ children }: { children: React.ReactNode }) {
     signOut,
     settings,
     updateExchangeRate,
+    accountingBasis,
+    setAccountingBasis,
     categories,
     addCategory,
     toggleCategoryActive,
     allExpenses: expenses,
     scopedExpenses,
     pendingApprovals,
+    unpaidPayables,
     addExpense,
     updateExpense,
     resubmitExpense,
     approveExpense,
     rejectExpense,
+    markExpenseAsPaid,
     deleteExpense,
+    accounts,
+    addAccount,
+    updateAccount,
+    journalEntries,
+    addJournalEntry,
+    capitalContributions,
+    addCapitalContribution,
+    recurringItems,
+    addRecurringItem,
+    updateRecurringItem,
+    deleteRecurringItem,
     budgets,
     saveBudget,
     deleteBudget,

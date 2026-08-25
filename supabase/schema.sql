@@ -1,5 +1,6 @@
 -- ============================================================================
--- RULEN EXPENSES - SUPABASE POSTGRESQL SCHEMA & ROW-LEVEL SECURITY POLICIES
+-- RULEN EXPENSES & FINANCIAL SYSTEM - SUPABASE POSTGRESQL SCHEMA
+-- Double-entry bookkeeping, payables, capital contributions, forecasting
 -- ============================================================================
 
 -- Enable UUID extension
@@ -12,7 +13,7 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   name text not null,
   email text not null unique,
-  role text not null check (role in ('admin', 'manager', 'employee')),
+  role text not null check (role in ('admin', 'manager', 'employee', 'accountant')),
   team_id text default 'Engineering',
   manager_id uuid references public.profiles(id) on delete set null,
   avatar_url text,
@@ -34,7 +35,7 @@ create table if not exists public.categories (
 );
 
 -- ----------------------------------------------------------------------------
--- 3. EXPENSES TABLE
+-- 3. EXPENSES TABLE (Extended with payables and dual cash/accrual dates)
 -- ----------------------------------------------------------------------------
 create table if not exists public.expenses (
   id uuid primary key default gen_random_uuid(),
@@ -44,9 +45,12 @@ create table if not exists public.expenses (
   exchange_rate numeric(10, 4) not null default 122.50 check (exchange_rate > 0),
   category_id uuid not null references public.categories(id) on delete restrict,
   description text not null,
-  expense_date date not null default current_date,
+  expense_date date not null default current_date, -- entry_date (accrual)
   receipt_url text,
   status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  payment_status text not null default 'paid' check (payment_status in ('paid', 'unpaid')),
+  due_date date,
+  paid_date date, -- settled_date (cash)
   reviewed_by uuid references public.profiles(id) on delete set null,
   reviewed_at timestamptz,
   review_note text,
@@ -55,7 +59,86 @@ create table if not exists public.expenses (
 );
 
 -- ----------------------------------------------------------------------------
--- 4. BUDGETS TABLE
+-- 4. CHART OF ACCOUNTS (Double-entry ledger taxonomy)
+-- ----------------------------------------------------------------------------
+create table if not exists public.accounts (
+  id uuid primary key default gen_random_uuid(),
+  code text unique,
+  name text not null,
+  type text not null check (type in ('asset', 'liability', 'equity', 'income', 'expense')),
+  parent_id uuid references public.accounts(id) on delete set null,
+  description text,
+  is_active boolean default true not null,
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+-- ----------------------------------------------------------------------------
+-- 5. JOURNAL ENTRIES (Accrual entry_date & Cash settled_date)
+-- ----------------------------------------------------------------------------
+create table if not exists public.journal_entries (
+  id uuid primary key default gen_random_uuid(),
+  entry_date date not null default current_date,
+  settled_date date, -- Nullable, populated when cash moves
+  description text not null,
+  created_by uuid references public.profiles(id) on delete set null,
+  source_type text not null check (source_type in ('expense', 'contribution', 'adjustment', 'manual')),
+  source_id uuid, -- Links to expense or capital_contribution
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+-- ----------------------------------------------------------------------------
+-- 6. JOURNAL LINES (Double-entry debit/credit postings)
+-- ----------------------------------------------------------------------------
+create table if not exists public.journal_lines (
+  id uuid primary key default gen_random_uuid(),
+  journal_entry_id uuid not null references public.journal_entries(id) on delete cascade,
+  account_id uuid not null references public.accounts(id) on delete restrict,
+  debit_amount numeric(12, 2) not null default 0 check (debit_amount >= 0),
+  credit_amount numeric(12, 2) not null default 0 check (credit_amount >= 0),
+  currency text not null default 'BDT' check (currency in ('USD', 'BDT')),
+  exchange_rate numeric(10, 4) not null default 122.50 check (exchange_rate > 0),
+  debit_bdt numeric(12, 2) not null default 0 check (debit_bdt >= 0),
+  credit_bdt numeric(12, 2) not null default 0 check (credit_bdt >= 0),
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+-- ----------------------------------------------------------------------------
+-- 7. CAPITAL CONTRIBUTIONS (Founder equity injections)
+-- ----------------------------------------------------------------------------
+create table if not exists public.capital_contributions (
+  id uuid primary key default gen_random_uuid(),
+  contributed_by uuid not null references public.profiles(id) on delete cascade,
+  founder_account_id uuid references public.accounts(id) on delete set null,
+  amount numeric(12, 2) not null check (amount > 0),
+  currency text not null check (currency in ('USD', 'BDT')),
+  exchange_rate numeric(10, 4) not null default 122.50 check (exchange_rate > 0),
+  contribution_date date not null default current_date,
+  settled_date date default current_date,
+  method text not null default 'bank_transfer' check (method in ('bank_transfer', 'cash', 'other')),
+  note text,
+  journal_entry_id uuid references public.journal_entries(id) on delete set null,
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+-- ----------------------------------------------------------------------------
+-- 8. RECURRING ITEMS (SaaS subscriptions, hosting & forecasting seed)
+-- ----------------------------------------------------------------------------
+create table if not exists public.recurring_items (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  category_id uuid not null references public.categories(id) on delete restrict,
+  vendor_name text not null,
+  amount numeric(12, 2) not null check (amount > 0),
+  currency text not null check (currency in ('USD', 'BDT')),
+  exchange_rate numeric(10, 4) not null default 122.50,
+  frequency text not null default 'monthly' check (frequency in ('monthly', 'quarterly', 'annual')),
+  next_due_date date not null,
+  is_active boolean default true not null,
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+-- ----------------------------------------------------------------------------
+-- 9. BUDGETS TABLE
 -- ----------------------------------------------------------------------------
 create table if not exists public.budgets (
   id uuid primary key default gen_random_uuid(),
@@ -70,7 +153,7 @@ create table if not exists public.budgets (
 );
 
 -- ----------------------------------------------------------------------------
--- 5. SETTINGS TABLE
+-- 10. SETTINGS & AUDIT LOGS
 -- ----------------------------------------------------------------------------
 create table if not exists public.settings (
   key text primary key,
@@ -79,23 +162,30 @@ create table if not exists public.settings (
   updated_at timestamptz default timezone('utc'::text, now()) not null
 );
 
--- ----------------------------------------------------------------------------
--- 6. ACTIVITY LOGS (AUDIT TRAIL)
--- ----------------------------------------------------------------------------
 create table if not exists public.activity_logs (
   id uuid primary key default gen_random_uuid(),
   expense_id uuid references public.expenses(id) on delete set null,
   actor_id uuid not null references public.profiles(id) on delete cascade,
-  action text not null, -- 'created', 'approved', 'rejected', 'resubmitted', 'updated_budget', 'updated_settings'
+  action text not null,
   details jsonb default '{}'::jsonb,
+  created_at timestamptz default timezone('utc'::text, now()) not null
+);
+
+create table if not exists public.team_invitations (
+  id uuid primary key default gen_random_uuid(),
+  email text not null unique,
+  name text not null,
+  role text not null check (role in ('admin', 'manager', 'employee', 'accountant')),
+  team_id text default 'Engineering',
+  manager_id uuid references public.profiles(id) on delete set null,
+  invited_by uuid references public.profiles(id) on delete set null,
+  status text not null default 'pending' check (status in ('pending', 'accepted')),
   created_at timestamptz default timezone('utc'::text, now()) not null
 );
 
 -- ----------------------------------------------------------------------------
 -- HELPER FUNCTIONS FOR RLS
 -- ----------------------------------------------------------------------------
-
--- Function to get current user role
 create or replace function public.get_auth_role()
 returns text
 language sql
@@ -105,7 +195,6 @@ as $$
   select role from public.profiles where id = auth.uid();
 $$;
 
--- Function to check if current user is admin
 create or replace function public.is_admin()
 returns boolean
 language sql
@@ -118,7 +207,30 @@ as $$
   );
 $$;
 
--- Function to check if current user is manager of submitter
+create or replace function public.is_accountant()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'accountant'
+  );
+$$;
+
+create or replace function public.has_financial_access()
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role in ('admin', 'accountant')
+  );
+$$;
+
 create or replace function public.is_manager_of(submitter_id uuid)
 returns boolean
 language sql
@@ -134,64 +246,71 @@ $$;
 -- ----------------------------------------------------------------------------
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- ----------------------------------------------------------------------------
-
--- Enable RLS on all tables
 alter table public.profiles enable row level security;
 alter table public.categories enable row level security;
 alter table public.expenses enable row level security;
+alter table public.accounts enable row level security;
+alter table public.journal_entries enable row level security;
+alter table public.journal_lines enable row level security;
+alter table public.capital_contributions enable row level security;
+alter table public.recurring_items enable row level security;
 alter table public.budgets enable row level security;
 alter table public.settings enable row level security;
 alter table public.activity_logs enable row level security;
+alter table public.team_invitations enable row level security;
 
--- PROFILES POLICIES
+-- PROFILES
 create policy "Users can view self profile"
   on public.profiles for select
-  using (auth.uid() = id);
+  using (auth.uid() = id or public.has_financial_access() or public.is_manager_of(id));
 
 create policy "Admins have full access to profiles"
   on public.profiles for all
   using (public.is_admin());
 
-create policy "Managers can view their managed employees"
-  on public.profiles for select
-  using (manager_id = auth.uid());
+create policy "Users can insert self profile"
+  on public.profiles for insert
+  to authenticated
+  with check (auth.uid() = id);
 
--- CATEGORIES POLICIES
+create policy "Users can update self profile"
+  on public.profiles for update
+  to authenticated
+  using (auth.uid() = id);
+
+-- CATEGORIES
 create policy "Authenticated users can read categories"
   on public.categories for select
   to authenticated
   using (true);
 
-create policy "Admins can manage categories"
+create policy "Admins and accountants can manage categories"
   on public.categories for all
-  using (public.is_admin());
+  using (public.has_financial_access());
 
--- EXPENSES POLICIES
--- 1. Select
-create policy "Employees can view own expenses"
+-- EXPENSES
+create policy "Scoped expense view"
   on public.expenses for select
   using (
     submitted_by = auth.uid()
-    or public.is_admin()
+    or public.has_financial_access()
     or public.is_manager_of(submitted_by)
   );
 
--- 2. Insert (Admin submissions auto-approve via trigger or client)
 create policy "Authenticated users can create expenses"
   on public.expenses for insert
   to authenticated
   with check (submitted_by = auth.uid());
 
--- 3. Update (Submitters can edit own rejected/pending; Managers can review team's; Admins can review all)
 create policy "Users can update permitted expenses"
   on public.expenses for update
   using (
     (submitted_by = auth.uid() and status in ('pending', 'rejected'))
     or public.is_admin()
     or public.is_manager_of(submitted_by)
+    or (public.is_accountant() and payment_status = 'unpaid')
   );
 
--- 4. Delete (Admins or submitters of pending expenses)
 create policy "Users can delete own pending or admins can delete any"
   on public.expenses for delete
   using (
@@ -199,12 +318,60 @@ create policy "Users can delete own pending or admins can delete any"
     or public.is_admin()
   );
 
--- BUDGETS POLICIES
-create policy "Admins and managers can view budgets"
+-- ACCOUNTS & GENERAL LEDGER
+create policy "Financial users can view accounts"
+  on public.accounts for select
+  to authenticated
+  using (public.has_financial_access());
+
+create policy "Financial users can manage accounts"
+  on public.accounts for all
+  using (public.has_financial_access());
+
+create policy "Financial users can view journal entries"
+  on public.journal_entries for select
+  to authenticated
+  using (public.has_financial_access());
+
+create policy "Financial users can create and edit journal entries"
+  on public.journal_entries for all
+  using (public.has_financial_access());
+
+create policy "Financial users can view journal lines"
+  on public.journal_lines for select
+  to authenticated
+  using (public.has_financial_access());
+
+create policy "Financial users can manage journal lines"
+  on public.journal_lines for all
+  using (public.has_financial_access());
+
+-- CAPITAL CONTRIBUTIONS
+create policy "Financial users can view capital contributions"
+  on public.capital_contributions for select
+  to authenticated
+  using (public.has_financial_access());
+
+create policy "Admins can create capital contributions"
+  on public.capital_contributions for all
+  using (public.is_admin());
+
+-- RECURRING ITEMS
+create policy "Authenticated users can view recurring items"
+  on public.recurring_items for select
+  to authenticated
+  using (true);
+
+create policy "Financial users can manage recurring items"
+  on public.recurring_items for all
+  using (public.has_financial_access());
+
+-- BUDGETS
+create policy "Admins, accountants and managers can view budgets"
   on public.budgets for select
   to authenticated
   using (
-    public.is_admin()
+    public.has_financial_access()
     or public.get_auth_role() = 'manager'
   );
 
@@ -212,7 +379,7 @@ create policy "Admins can manage budgets"
   on public.budgets for all
   using (public.is_admin());
 
--- SETTINGS POLICIES
+-- SETTINGS
 create policy "Authenticated users can view settings"
   on public.settings for select
   to authenticated
@@ -222,12 +389,21 @@ create policy "Admins can update settings"
   on public.settings for all
   using (public.is_admin());
 
--- ACTIVITY LOGS POLICIES
-create policy "Users can view their activity logs or admin/manager scoped"
+-- TEAM INVITATIONS
+create policy "Admins can manage team invitations"
+  on public.team_invitations for all
+  using (public.is_admin());
+
+create policy "Anyone can read invitation by email"
+  on public.team_invitations for select
+  using (true);
+
+-- ACTIVITY LOGS
+create policy "Activity logs view access"
   on public.activity_logs for select
   using (
     actor_id = auth.uid()
-    or public.is_admin()
+    or public.has_financial_access()
     or exists (
       select 1 from public.expenses e
       where e.id = activity_logs.expense_id
@@ -239,88 +415,6 @@ create policy "Authenticated users can insert activity logs"
   on public.activity_logs for insert
   to authenticated
   with check (actor_id = auth.uid());
-
--- ----------------------------------------------------------------------------
--- TRIGGERS & BUSINESS LOGIC
--- ----------------------------------------------------------------------------
-
--- Trigger to auto-approve admin expenses
-create or replace function public.handle_admin_expense_auto_approve()
-returns trigger
-language plpgsql
-security definer
-as $$
-begin
-  if (select role from public.profiles where id = new.submitted_by) = 'admin' then
-    new.status := 'approved';
-    new.reviewed_by := new.submitted_by;
-    new.reviewed_at := timezone('utc'::text, now());
-    new.review_note := 'Auto-approved (Founder / Admin submission)';
-  end if;
-  return new;
-end;
-$$;
-
-create or replace trigger on_expense_before_insert
-  before insert on public.expenses
-  for each row
-  execute function public.handle_admin_expense_auto_approve();
-
--- Trigger to update updated_at timestamp
-create or replace function public.set_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at := timezone('utc'::text, now());
-  return new;
-end;
-$$;
-
-create or replace trigger on_expense_update_timestamp
-  before update on public.expenses
-  for each row
-  execute function public.set_updated_at();
-
--- Trigger to automatically create a profile when a new user signs up in Supabase Auth
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-as $$
-declare
-  user_count int;
-  assigned_role text;
-begin
-  select count(*) into user_count from public.profiles;
-  -- If this is the first user, assign 'admin' role (Founder), otherwise default to 'employee' or metadata role
-  if user_count = 0 then
-    assigned_role := 'admin';
-  else
--- ----------------------------------------------------------------------------
--- 7. TEAM INVITATIONS TABLE
--- ----------------------------------------------------------------------------
-create table if not exists public.team_invitations (
-  id uuid primary key default gen_random_uuid(),
-  email text not null unique,
-  name text not null,
-  role text not null check (role in ('admin', 'manager', 'employee')),
-  team_id text default 'Engineering',
-  manager_id uuid references public.profiles(id) on delete set null,
-  invited_by uuid references public.profiles(id) on delete set null,
-  status text not null default 'pending' check (status in ('pending', 'accepted')),
-  created_at timestamptz default timezone('utc'::text, now()) not null
-);
-
-alter table public.team_invitations enable row level security;
-
-create policy "Admins can manage team invitations"
-  on public.team_invitations for all
-  using (public.is_admin());
-
-create policy "Anyone can read invitation by email"
-  on public.team_invitations for select
-  using (true);
 
 -- ----------------------------------------------------------------------------
 -- AUTOMATIC PROFILE CREATION TRIGGER ON AUTH.USERS
@@ -388,23 +482,7 @@ create or replace trigger on_auth_user_created
   execute function public.handle_new_user();
 
 -- ----------------------------------------------------------------------------
--- STORAGE SETUP (For Receipt Uploads)
--- ----------------------------------------------------------------------------
-insert into storage.buckets (id, name, public)
-values ('receipts', 'receipts', true)
-on conflict (id) do nothing;
-
-create policy "Public receipt read access"
-  on storage.objects for select
-  using (bucket_id = 'receipts');
-
-create policy "Authenticated receipt upload"
-  on storage.objects for insert
-  to authenticated
-  with check (bucket_id = 'receipts');
-
--- ----------------------------------------------------------------------------
--- SEED DATA
+-- SEED DATA (Chart of Accounts, Categories, Settings)
 -- ----------------------------------------------------------------------------
 
 -- Seed default categories
@@ -420,6 +498,26 @@ insert into public.categories (name, description, is_active) values
   ('Cloud & Deployment', 'AWS, GCP compute, Docker registries, CDN', true),
   ('Other', 'Miscellaneous operational expenses', true)
 on conflict (name) do nothing;
+
+-- Seed Chart of Accounts
+insert into public.accounts (code, name, type, description, is_active) values
+  ('1010', 'Cash / Bank Operating Account', 'asset', 'Primary operational bank account and digital wallets.', true),
+  ('2010', 'Accounts Payable', 'liability', 'Approved unpaid contractor invoices and vendor payables.', true),
+  ('3000', 'Founder Capital', 'equity', 'Total invested capital contributed by founders.', true),
+  ('3010', 'Founder Capital — Founder 1', 'equity', 'Capital contributions from Founder 1.', true),
+  ('3020', 'Founder Capital — Founder 2', 'equity', 'Capital contributions from Founder 2.', true),
+  ('4010', 'Founder Contributions', 'income', 'Inward funding infusions for remote company runway.', true),
+  ('5010', 'Salary & Compensation Expense', 'expense', 'Employee wages and contractor compensation.', true),
+  ('5020', 'Marketing & Advertising Expense', 'expense', 'Paid campaigns, ads, influencer promotions.', true),
+  ('5030', 'Product Launch Expense', 'expense', 'Launch events, press releases, Product Hunt promotions.', true),
+  ('5040', 'Demo Video Production Expense', 'expense', 'Video editing, 3D motion graphics, voiceovers.', true),
+  ('5050', 'Branding & Logo Design Expense', 'expense', 'Brand identity assets, typography, design assets.', true),
+  ('5060', 'Domain & Web Hosting Expense', 'expense', 'Vercel, Supabase, Cloudflare, domains.', true),
+  ('5070', 'AI Tools & API Subscriptions', 'expense', 'OpenAI, Anthropic Claude, Cursor, Midjourney.', true),
+  ('5080', 'QA & Testing Services Expense', 'expense', 'Automated test infrastructure, device labs, QA.', true),
+  ('5090', 'Cloud & Infrastructure Compute', 'expense', 'AWS, GCP compute, Docker containers, CDN.', true),
+  ('5100', 'Miscellaneous Operations Expense', 'expense', 'General administrative and remote office expenses.', true)
+on conflict (code) do nothing;
 
 -- Seed default settings
 insert into public.settings (key, value) values

@@ -19,8 +19,9 @@ import {
   RotateCcw,
   Check,
   X,
-  ChevronDown,
+  CreditCard,
 } from 'lucide-react';
+import Link from 'next/link';
 
 interface ExpenseTableProps {
   expenses: ExpenseWithDetails[];
@@ -28,20 +29,32 @@ interface ExpenseTableProps {
 }
 
 export function ExpenseTable({ expenses, showFilters = true }: ExpenseTableProps) {
-  const { currentUser, approveExpense, rejectExpense, deleteExpense } = useExpenses();
+  const { currentUser, approveExpense, rejectExpense, deleteExpense, markExpenseAsPaid } = useExpenses();
   const [selectedReceipt, setSelectedReceipt] = useState<ExpenseWithDetails | null>(null);
   const [editingExpense, setEditingExpense] = useState<ExpenseWithDetails | null>(null);
   const [rejectingExpenseId, setRejectingExpenseId] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState('');
 
-  // Status Badge Component
+  const isFinancialUser = currentUser?.role === 'admin' || currentUser?.role === 'accountant';
+
   const renderStatusBadge = (expense: ExpenseWithDetails) => {
     switch (expense.status) {
       case 'approved':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono uppercase bg-cohere-pale-green text-cohere-deep-green border border-[#c4ebbe]">
-            <CheckCircle2 className="w-3 h-3" /> Approved
-          </span>
+          <div className="flex flex-col items-center gap-1">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono uppercase bg-cohere-pale-green text-cohere-deep-green border border-[#c4ebbe]">
+              <CheckCircle2 className="w-3 h-3" /> Approved
+            </span>
+            {expense.payment_status === 'unpaid' ? (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-mono uppercase bg-amber-50 text-amber-800 border border-amber-200" title={expense.due_date ? `Due: ${expense.due_date}` : 'Unpaid AP'}>
+                <Clock className="w-2.5 h-2.5 text-amber-600" /> AP Unpaid
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono text-cohere-muted-slate">
+                Paid ({expense.paid_date || expense.expense_date})
+              </span>
+            )}
+          </div>
         );
       case 'rejected':
         return (
@@ -111,6 +124,7 @@ export function ExpenseTable({ expenses, showFilters = true }: ExpenseTableProps
                 const canReview = (isAdmin || (isManager && expense.submitter?.manager_id === currentUser?.id)) && expense.status === 'pending';
                 const canEditResubmit = isSubmitter && (expense.status === 'rejected' || expense.status === 'pending');
                 const canDelete = isAdmin || (isSubmitter && expense.status === 'pending');
+                const canSettleAP = isFinancialUser && expense.status === 'approved' && expense.payment_status === 'unpaid';
 
                 return (
                   <tr
@@ -186,6 +200,17 @@ export function ExpenseTable({ expenses, showFilters = true }: ExpenseTableProps
                     {/* Actions */}
                     <td className="py-3.5 px-4 align-top text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1">
+                        {/* Settle AP link for unpaid approved bills */}
+                        {canSettleAP && (
+                          <Link
+                            href="/payables"
+                            className="p-1 rounded-sm bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition-colors text-[11px] flex items-center gap-0.5 font-medium px-2 mr-1"
+                            title="Settle Payable"
+                          >
+                            <CreditCard className="w-3 h-3" /> Settle AP
+                          </Link>
+                        )}
+
                         {/* Quick Review Actions for Pending Items */}
                         {canReview && (
                           <div className="flex items-center gap-1 mr-1">

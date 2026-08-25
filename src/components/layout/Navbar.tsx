@@ -2,7 +2,6 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { useExpenses } from '@/lib/store/expense-context';
 import { ExpenseFormModal } from '../expenses/ExpenseFormModal';
@@ -18,34 +17,33 @@ import {
   LogOut,
   User,
   Shield,
+  BookOpen,
+  CreditCard,
+  TrendingUp,
+  RotateCw,
+  Coins,
+  ChevronDown,
+  Layers,
 } from 'lucide-react';
 
 export function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { currentUser, pendingApprovals, signOut, isLoading } = useExpenses();
+  const {
+    currentUser,
+    pendingApprovals,
+    unpaidPayables,
+    signOut,
+    isLoading,
+    accountingBasis,
+    setAccountingBasis,
+  } = useExpenses();
+
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isBookkeepingOpen, setIsBookkeepingOpen] = useState(false);
 
-  const navLinks = [
-    { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { href: '/expenses', label: 'Expenses', icon: Receipt },
-    {
-      href: '/approvals',
-      label: 'Approvals',
-      icon: CheckCircle2,
-      badge: currentUser && currentUser.role !== 'employee' && pendingApprovals.length > 0 ? pendingApprovals.length : null,
-      hidden: currentUser?.role === 'employee',
-    },
-    { href: '/budgets', label: 'Budgets', icon: PieChart },
-    { href: '/reports', label: 'Reports', icon: FileBarChart },
-    {
-      href: '/settings',
-      label: 'Settings',
-      icon: Settings,
-      adminOnly: true,
-    },
-  ];
+  const isFinancialUser = currentUser?.role === 'admin' || currentUser?.role === 'accountant';
 
   const handleSignOut = async () => {
     await signOut();
@@ -59,48 +57,218 @@ export function Navbar() {
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
             <div className="flex items-center gap-6">
-              <Link href="/" className="flex items-center gap-3 group">
+              <Link href="/" className="flex items-center gap-2.5 group">
                 <img
                   src="/logo.png"
                   alt="Rulen Logo"
                   className="h-7 w-auto object-contain"
                 />
-                <span className="text-[10px] font-mono font-medium uppercase px-1.5 py-0.5 rounded bg-cohere-soft-stone text-cohere-slate border border-cohere-card-border">
-                  EXPENSES
+                <span className="text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-cohere-soft-stone text-cohere-slate border border-cohere-card-border">
+                  FINANCIALS
                 </span>
               </Link>
 
               {/* Navigation Links */}
               {currentUser && (
-                <nav className="hidden md:flex items-center space-x-1">
-                  {navLinks
-                    .filter((item) => !item.hidden)
-                    .map((item) => {
-                      const isActive = pathname === item.href;
-                      const Icon = item.icon;
-                      return (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
-                            isActive
-                              ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
-                              : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
-                          }`}
-                        >
-                          <Icon className="w-3.5 h-3.5" />
-                          <span>{item.label}</span>
-                          {item.badge && (
-                            <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-cohere-coral text-white font-bold">
-                              {item.badge}
-                            </span>
-                          )}
-                          {item.adminOnly && currentUser.role !== 'admin' && (
-                            <Lock className="w-2.5 h-2.5 text-cohere-muted-slate opacity-70" />
-                          )}
-                        </Link>
-                      );
-                    })}
+                <nav className="hidden lg:flex items-center space-x-1">
+                  {/* Dashboard */}
+                  <Link
+                    href="/"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                      pathname === '/'
+                        ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                        : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                    }`}
+                  >
+                    <LayoutDashboard className="w-3.5 h-3.5" />
+                    <span>Dashboard</span>
+                  </Link>
+
+                  {/* Expenses */}
+                  <Link
+                    href="/expenses"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                      pathname === '/expenses'
+                        ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                        : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                    }`}
+                  >
+                    <Receipt className="w-3.5 h-3.5" />
+                    <span>Expenses</span>
+                  </Link>
+
+                  {/* Approvals (Admin & Manager only) */}
+                  {currentUser.role !== 'employee' && currentUser.role !== 'accountant' && (
+                    <Link
+                      href="/approvals"
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                        pathname === '/approvals'
+                          ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                          : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                      }`}
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Approvals</span>
+                      {pendingApprovals.length > 0 && (
+                        <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-cohere-coral text-white font-bold">
+                          {pendingApprovals.length}
+                        </span>
+                      )}
+                    </Link>
+                  )}
+
+                  {/* Accounts Payable (Admin & Accountant) */}
+                  {isFinancialUser && (
+                    <Link
+                      href="/payables"
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                        pathname === '/payables'
+                          ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                          : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                      }`}
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Payables</span>
+                      {unpaidPayables.length > 0 && (
+                        <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-amber-600 text-white font-bold">
+                          {unpaidPayables.length}
+                        </span>
+                      )}
+                    </Link>
+                  )}
+
+                  {/* Bookkeeping Dropdown (Admin & Accountant) */}
+                  {isFinancialUser && (
+                    <div className="relative">
+                      <button
+                        onClick={() => setIsBookkeepingOpen(!isBookkeepingOpen)}
+                        className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                          pathname.startsWith('/ledger') ||
+                          pathname.startsWith('/accounts') ||
+                          pathname.startsWith('/contributions')
+                            ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                            : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                        }`}
+                      >
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>Bookkeeping</span>
+                        <ChevronDown className="w-3 h-3 opacity-60" />
+                      </button>
+
+                      {isBookkeepingOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-40"
+                            onClick={() => setIsBookkeepingOpen(false)}
+                          />
+                          <div className="absolute left-0 mt-1 w-52 bg-white rounded-md border border-cohere-hairline shadow-lg z-50 p-1.5 animate-in fade-in space-y-0.5">
+                            <Link
+                              href="/ledger"
+                              onClick={() => setIsBookkeepingOpen(false)}
+                              className="flex items-center gap-2 px-3 py-2 rounded text-xs text-cohere-ink hover:bg-cohere-soft-stone/70 font-medium"
+                            >
+                              <Layers className="w-3.5 h-3.5 text-cohere-slate" />
+                              <div>
+                                <div className="font-semibold">General Ledger</div>
+                                <div className="text-[10px] text-cohere-muted-slate font-mono">Balanced double-entry journal</div>
+                              </div>
+                            </Link>
+
+                            <Link
+                              href="/accounts"
+                              onClick={() => setIsBookkeepingOpen(false)}
+                              className="flex items-center gap-2 px-3 py-2 rounded text-xs text-cohere-ink hover:bg-cohere-soft-stone/70 font-medium"
+                            >
+                              <BookOpen className="w-3.5 h-3.5 text-cohere-slate" />
+                              <div>
+                                <div className="font-semibold">Chart of Accounts</div>
+                                <div className="text-[10px] text-cohere-muted-slate font-mono">Assets, Liabilities, Equity</div>
+                              </div>
+                            </Link>
+
+                            <Link
+                              href="/contributions"
+                              onClick={() => setIsBookkeepingOpen(false)}
+                              className="flex items-center gap-2 px-3 py-2 rounded text-xs text-cohere-ink hover:bg-cohere-soft-stone/70 font-medium"
+                            >
+                              <Coins className="w-3.5 h-3.5 text-cohere-slate" />
+                              <div>
+                                <div className="font-semibold">Capital Contributions</div>
+                                <div className="text-[10px] text-cohere-muted-slate font-mono">Founder inward equity</div>
+                              </div>
+                            </Link>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Budgets */}
+                  <Link
+                    href="/budgets"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                      pathname === '/budgets'
+                        ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                        : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                    }`}
+                  >
+                    <PieChart className="w-3.5 h-3.5" />
+                    <span>Budgets</span>
+                  </Link>
+
+                  {/* Forecast */}
+                  <Link
+                    href="/forecast"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                      pathname === '/forecast'
+                        ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                        : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                    }`}
+                  >
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>Forecast</span>
+                  </Link>
+
+                  {/* Renewals */}
+                  <Link
+                    href="/renewals"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                      pathname === '/renewals'
+                        ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                        : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                    }`}
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>Renewals</span>
+                  </Link>
+
+                  {/* Reports & Balance Sheet */}
+                  <Link
+                    href="/reports"
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                      pathname.startsWith('/reports')
+                        ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                        : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                    }`}
+                  >
+                    <FileBarChart className="w-3.5 h-3.5" />
+                    <span>Reports</span>
+                  </Link>
+
+                  {/* Settings (Admin only) */}
+                  {currentUser.role === 'admin' && (
+                    <Link
+                      href="/settings"
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-body font-medium transition-all ${
+                        pathname === '/settings'
+                          ? 'text-cohere-black bg-cohere-soft-stone font-semibold'
+                          : 'text-cohere-slate hover:text-cohere-ink hover:bg-[#f7f7f7]'
+                      }`}
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      <span>Settings</span>
+                    </Link>
+                  )}
                 </nav>
               )}
             </div>
@@ -109,6 +277,34 @@ export function Navbar() {
             <div className="flex items-center gap-3">
               {currentUser ? (
                 <>
+                  {/* Dual Basis Toggle for Accountant & Admin */}
+                  {isFinancialUser && (
+                    <div className="hidden sm:flex items-center p-0.5 rounded-pill bg-cohere-soft-stone border border-cohere-card-border text-[11px] font-mono">
+                      <button
+                        onClick={() => setAccountingBasis('accrual')}
+                        className={`px-2.5 py-1 rounded-pill transition-all font-medium ${
+                          accountingBasis === 'accrual'
+                            ? 'bg-white text-cohere-ink shadow-xs font-bold'
+                            : 'text-cohere-slate hover:text-cohere-ink'
+                        }`}
+                        title="Accrual Basis: recognized as of entry date"
+                      >
+                        Accrual
+                      </button>
+                      <button
+                        onClick={() => setAccountingBasis('cash')}
+                        className={`px-2.5 py-1 rounded-pill transition-all font-medium ${
+                          accountingBasis === 'cash'
+                            ? 'bg-white text-cohere-ink shadow-xs font-bold'
+                            : 'text-cohere-slate hover:text-cohere-ink'
+                        }`}
+                        title="Cash Basis: recognized as of settled date"
+                      >
+                        Cash
+                      </button>
+                    </div>
+                  )}
+
                   {/* Log Expense Primary CTA */}
                   <button
                     onClick={() => setIsExpenseModalOpen(true)}
@@ -118,20 +314,29 @@ export function Navbar() {
                     <span>Log Expense</span>
                   </button>
 
-                  {/* Real User Menu */}
+                  {/* User Menu */}
                   <div className="relative">
                     <button
                       onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
                       className="flex items-center gap-2 p-1.5 rounded-pill border border-cohere-hairline hover:border-black transition-colors bg-white text-xs"
                     >
                       <img
-                        src={currentUser.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${currentUser.name}`}
+                        src={
+                          currentUser.avatar_url ||
+                          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(
+                            currentUser.name
+                          )}`
+                        }
                         alt={currentUser.name}
                         className="w-6 h-6 rounded-full object-cover border border-cohere-hairline"
                       />
-                      <div className="hidden sm:flex flex-col text-left pr-1">
-                        <span className="font-semibold text-cohere-ink leading-tight">{currentUser.name}</span>
-                        <span className="text-[10px] font-mono uppercase text-cohere-muted-slate leading-tight">{currentUser.role}</span>
+                      <div className="hidden md:flex flex-col text-left pr-1">
+                        <span className="font-semibold text-cohere-ink leading-tight">
+                          {currentUser.name}
+                        </span>
+                        <span className="text-[10px] font-mono uppercase text-cohere-muted-slate leading-tight">
+                          {currentUser.role}
+                        </span>
                       </div>
                     </button>
 
@@ -141,11 +346,13 @@ export function Navbar() {
                           className="fixed inset-0 z-40"
                           onClick={() => setIsUserMenuOpen(false)}
                         />
-                        <div className="absolute right-0 mt-2 w-56 bg-white rounded-md border border-cohere-hairline shadow-lg z-50 p-2 animate-in fade-in">
+                        <div className="absolute right-0 mt-2 w-60 bg-white rounded-md border border-cohere-hairline shadow-lg z-50 p-2 animate-in fade-in">
                           <div className="px-3 py-2 border-b border-cohere-hairline">
                             <div className="font-semibold text-xs text-cohere-ink">{currentUser.name}</div>
-                            <div className="text-[11px] font-mono text-cohere-muted-slate truncate">{currentUser.email}</div>
-                            <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cohere-soft-stone text-cohere-ink">
+                            <div className="text-[11px] font-mono text-cohere-muted-slate truncate">
+                              {currentUser.email}
+                            </div>
+                            <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cohere-soft-stone text-cohere-ink">
                               <Shield className="w-2.5 h-2.5 text-cohere-coral" /> Role: {currentUser.role}
                             </div>
                           </div>

@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { useExpenses } from '@/lib/store/expense-context';
 import { Role } from '@/lib/types';
-import { Users, UserPlus, Shield, Check, Copy, Link as LinkIcon, Mail, Clock } from 'lucide-react';
+import { Users, UserPlus, Shield, Check, Copy, Link as LinkIcon, Mail, Clock, BookOpen } from 'lucide-react';
 
 export function UserManager() {
   const { profiles, invitations, inviteMember, currentUser } = useExpenses();
@@ -44,7 +44,9 @@ export function UserManager() {
     setIsSubmitting(false);
 
     if (!error) {
-      setInviteSuccess(`Invitation provisioned for ${name} (${email}) with role: ${role.toUpperCase()}. They can now sign up using this email.`);
+      setInviteSuccess(
+        `Invitation provisioned for ${name} (${email}) with role: ${role.toUpperCase()}. They can now sign up using this email.`
+      );
       setName('');
       setEmail('');
       setRole('employee');
@@ -58,6 +60,12 @@ export function UserManager() {
         return (
           <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-cohere-near-black text-white">
             Admin (Founder)
+          </span>
+        );
+      case 'accountant':
+        return (
+          <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-blue-50 text-blue-800 border border-blue-200">
+            Accountant (CPA)
           </span>
         );
       case 'manager':
@@ -87,7 +95,7 @@ export function UserManager() {
             <Users className="w-4 h-4 text-cohere-slate" /> Users & Permissions
           </h3>
           <p className="text-xs text-cohere-slate mt-0.5">
-            Manage company team members, provision roles, and configure manager approval scoping.
+            Manage company team members, provision certified accountant roles, and configure manager approval scoping.
           </p>
         </div>
 
@@ -161,7 +169,8 @@ export function UserManager() {
               >
                 <option value="employee">Employee (Submissions only)</option>
                 <option value="manager">Manager (Team approvals & spend)</option>
-                <option value="admin">Admin / Founder (Full access)</option>
+                <option value="accountant">Accountant (GL, Bookkeeping & Statements)</option>
+                <option value="admin">Admin / Founder (Full governance)</option>
               </select>
             </div>
 
@@ -171,7 +180,7 @@ export function UserManager() {
               </label>
               <input
                 type="text"
-                placeholder="Engineering, Design, Marketing"
+                placeholder="Engineering, Finance, Executive"
                 value={teamId}
                 onChange={(e) => setTeamId(e.target.value)}
                 className="w-full px-3 py-1.5 rounded-sm border border-cohere-border-light text-xs font-medium text-cohere-ink bg-white focus:outline-none focus:ring-1 focus:ring-black"
@@ -267,8 +276,8 @@ export function UserManager() {
                     </td>
 
                     <td className="py-3 px-3 font-mono text-[11px] text-cohere-slate">
-                      {p.role === 'admin' ? (
-                        <span className="text-cohere-muted-slate italic">Founder Clearance</span>
+                      {p.role === 'admin' || p.role === 'accountant' ? (
+                        <span className="text-cohere-muted-slate italic">Financial Clearance</span>
                       ) : mgr ? (
                         <span className="font-medium text-cohere-ink">{mgr.name}</span>
                       ) : (
@@ -277,8 +286,8 @@ export function UserManager() {
                     </td>
 
                     <td className="py-3 px-3 text-right font-mono text-[10px] uppercase text-cohere-muted-slate">
-                      {p.role === 'admin'
-                        ? 'Full Company'
+                      {p.role === 'admin' || p.role === 'accountant'
+                        ? 'Full Financial Ledger'
                         : p.role === 'manager'
                         ? 'Team Directs'
                         : 'Self Only'}

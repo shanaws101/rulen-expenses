@@ -2,13 +2,13 @@
 
 import React, { useState } from 'react';
 import { useExpenses } from '@/lib/store/expense-context';
-import { Currency, Expense } from '@/lib/types';
+import { Currency, Expense, PaymentStatus } from '@/lib/types';
 import { convertToBDT, formatBDT } from '@/lib/currency';
-import { X, Upload, CheckCircle2, AlertCircle, FileText, Image as ImageIcon } from 'lucide-react';
+import { X, Upload, CheckCircle2, AlertCircle, FileText, Image as ImageIcon, CreditCard, Clock } from 'lucide-react';
 
 interface ExpenseFormModalProps {
   onClose: () => void;
-  initialExpense?: Expense | null; // If editing / resubmitting
+  initialExpense?: Expense | null;
 }
 
 export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalProps) {
@@ -29,6 +29,14 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
   const [expenseDate, setExpenseDate] = useState<string>(
     initialExpense ? initialExpense.expense_date : new Date().toISOString().split('T')[0]
   );
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>(
+    initialExpense ? initialExpense.payment_status : 'paid'
+  );
+  const [dueDate, setDueDate] = useState<string>(initialExpense?.due_date || '');
+  const [paidDate, setPaidDate] = useState<string>(
+    initialExpense?.paid_date || (paymentStatus === 'paid' ? expenseDate : '')
+  );
+
   const [receiptUrl, setReceiptUrl] = useState<string | null>(initialExpense?.receipt_url || null);
   const [receiptFileName, setReceiptFileName] = useState<string | null>(
     initialExpense?.receipt_url ? 'Existing Receipt Attachment' : null
@@ -41,13 +49,10 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
   const numericRate = parseFloat(exchangeRate) || settings.default_exchange_rate;
   const convertedBDT = convertToBDT(numericAmount, currency, numericRate);
 
-  // File upload handler (uploads to Supabase Storage if configured or creates base64 preview)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setReceiptFileName(file.name);
-      
-      // Try uploading to Supabase Storage
       try {
         const { uploadReceiptToSupabase } = await import('@/lib/supabase/storage');
         const uploadedUrl = await uploadReceiptToSupabase(file);
@@ -59,7 +64,6 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
         console.warn('Supabase storage not available, using local preview');
       }
 
-      // Fallback to local base64 reader
       const reader = new FileReader();
       reader.onloadend = () => {
         setReceiptUrl(reader.result as string);
@@ -68,7 +72,6 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
     }
   };
 
-  // Sample receipt presets for quick testing
   const sampleReceipts = [
     { label: 'Cloud Invoice', url: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=800&auto=format&fit=crop&q=80' },
     { label: 'SaaS Receipt', url: 'https://images.unsplash.com/photo-1586281380349-632531db7ed4?w=800&auto=format&fit=crop&q=80' },
@@ -91,6 +94,10 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
       setError('Please provide a description or business purpose for this expense.');
       return;
     }
+    if (paymentStatus === 'unpaid' && !dueDate) {
+      setError('Please provide a payment due date for unpaid bills.');
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -105,6 +112,8 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
             description,
             expense_date: expenseDate,
             receipt_url: receiptUrl,
+            payment_status: paymentStatus,
+            due_date: paymentStatus === 'unpaid' ? dueDate : null,
           });
         } else {
           await updateExpense(initialExpense.id, {
@@ -115,6 +124,9 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
             description,
             expense_date: expenseDate,
             receipt_url: receiptUrl,
+            payment_status: paymentStatus,
+            due_date: paymentStatus === 'unpaid' ? dueDate : null,
+            paid_date: paymentStatus === 'paid' ? (paidDate || expenseDate) : null,
           });
         }
       } else {
@@ -126,6 +138,9 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
           description,
           expense_date: expenseDate,
           receipt_url: receiptUrl,
+          payment_status: paymentStatus,
+          due_date: paymentStatus === 'unpaid' ? dueDate : null,
+          paid_date: paymentStatus === 'paid' ? (paidDate || expenseDate) : null,
         });
 
         if (!created) {
@@ -148,11 +163,11 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-cohere-hairline bg-white">
           <div>
-            <div className="text-[11px] font-mono uppercase text-cohere-muted-slate tracking-wider">
-              {initialExpense ? (initialExpense.status === 'rejected' ? 'Fix & Resubmit Entry' : 'Edit Expense') : 'New Expense Submission'}
-            </div>
-            <h2 className="text-xl font-display font-bold text-cohere-ink tracking-tight mt-0.5">
-              {initialExpense ? 'Update Expense Details' : 'Log Company Expense'}
+            <span className="text-[11px] font-mono uppercase text-cohere-muted-slate tracking-wider">
+              {initialExpense ? 'Revise Submission' : 'New Expense Submission'}
+            </span>
+            <h2 className="text-xl font-display font-bold text-cohere-ink tracking-tight">
+              {initialExpense ? 'Update Expense Record' : 'Log Company Expense'}
             </h2>
           </div>
           <button
@@ -182,7 +197,7 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
               </span>
             ) : (
               <span className="text-[11px] font-mono text-cohere-slate">
-                Will route to manager for review
+                Will route for review
               </span>
             )}
           </div>
@@ -191,37 +206,37 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           {error && (
-            <div className="p-3 rounded-md bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <div className="p-3 rounded bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* Amount and Currency Row */}
-          <div>
-            <label className="block text-xs font-mono uppercase text-cohere-slate mb-1.5 tracking-wider">
+          {/* Amount & Currency */}
+          <div className="space-y-2">
+            <label className="block text-[11px] font-mono uppercase text-cohere-slate">
               Expense Amount & Currency *
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <div className="sm:col-span-2 relative">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
                 <input
                   type="number"
                   step="0.01"
                   min="0.01"
+                  required
+                  placeholder="0.00"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  required
-                  className="w-full px-3 py-2.5 rounded-sm border border-cohere-border-light text-cohere-ink font-mono text-base font-semibold focus:outline-none focus:ring-1 focus:ring-cohere-near-black focus:border-cohere-near-black transition-all"
+                  className="w-full px-3.5 py-2.5 rounded-sm border border-cohere-border-light text-base font-mono font-bold text-cohere-ink focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-300"
                 />
               </div>
 
-              {/* Currency Selector Pills */}
-              <div className="flex rounded-sm p-1 bg-cohere-soft-stone border border-cohere-card-border">
+              {/* Currency Selector */}
+              <div className="flex p-1 bg-cohere-soft-stone rounded-sm border border-cohere-card-border">
                 <button
                   type="button"
                   onClick={() => setCurrency('USD')}
-                  className={`flex-1 py-1.5 rounded text-xs font-mono font-semibold transition-all ${
+                  className={`px-3 py-1.5 rounded text-xs font-mono font-semibold transition-all ${
                     currency === 'USD'
                       ? 'bg-white text-cohere-ink shadow-sm'
                       : 'text-cohere-slate hover:text-cohere-ink'
@@ -232,7 +247,7 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
                 <button
                   type="button"
                   onClick={() => setCurrency('BDT')}
-                  className={`flex-1 py-1.5 rounded text-xs font-mono font-semibold transition-all ${
+                  className={`px-3 py-1.5 rounded text-xs font-mono font-semibold transition-all ${
                     currency === 'BDT'
                       ? 'bg-white text-cohere-ink shadow-sm'
                       : 'text-cohere-slate hover:text-cohere-ink'
@@ -243,55 +258,103 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
               </div>
             </div>
 
-            {/* Live Currency Conversion Helper */}
-            <div className="mt-2.5 p-3 rounded-sm bg-cohere-pale-blue/60 border border-[#e1e9fc] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="text-xs text-cohere-dark-navy">
-                <span className="font-mono font-semibold uppercase text-[10px] text-cohere-action-blue tracking-wider block sm:inline mr-2">
-                  Converted Total (Base BDT):
-                </span>
-                <span className="font-mono text-sm font-bold text-cohere-black">
-                  {formatBDT(convertedBDT)}
-                </span>
-              </div>
+            {/* Exchange Rate breakdown for USD */}
+            {currency === 'USD' && (
+              <div className="p-3 bg-cohere-soft-stone/60 rounded-md border border-cohere-hairline space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-cohere-slate">
+                    Converted Total (Base BDT): <strong className="text-cohere-black">{formatBDT(convertedBDT)}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCustomRateEnabled(!customRateEnabled)}
+                    className="text-[11px] text-cohere-action-blue hover:underline"
+                  >
+                    {customRateEnabled ? 'Use default rate' : 'Override rate'}
+                  </button>
+                </div>
 
-              {currency === 'USD' && (
-                <div className="text-[11px] font-mono text-cohere-slate flex items-center gap-1.5">
-                  <span>Rate: 1 USD =</span>
-                  {customRateEnabled ? (
+                {customRateEnabled && (
+                  <div className="flex items-center gap-2 pt-1 border-t border-cohere-card-border">
+                    <span className="text-[11px] font-mono text-cohere-slate">1 USD =</span>
                     <input
                       type="number"
                       step="0.01"
                       value={exchangeRate}
                       onChange={(e) => setExchangeRate(e.target.value)}
-                      className="w-20 px-1.5 py-0.5 border border-cohere-hairline rounded bg-white text-xs font-mono text-cohere-ink"
+                      className="w-24 px-2 py-1 text-xs font-mono border border-cohere-border-light rounded bg-white"
                     />
-                  ) : (
-                    <strong className="text-cohere-ink font-mono">{exchangeRate}</strong>
-                  )}
-                  <span>BDT</span>
-                  <button
-                    type="button"
-                    onClick={() => setCustomRateEnabled(!customRateEnabled)}
-                    className="text-cohere-action-blue underline text-[10px] ml-1"
-                  >
-                    {customRateEnabled ? 'Done' : 'Override'}
-                  </button>
-                </div>
-              )}
+                    <span className="text-[11px] font-mono text-cohere-slate">BDT</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Payment Status & Settlement */}
+          <div className="space-y-2 p-3 bg-cohere-soft-stone/40 rounded-md border border-cohere-hairline">
+            <label className="block text-[11px] font-mono uppercase text-cohere-slate">
+              Payment & Settlement Status *
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPaymentStatus('paid')}
+                className={`flex items-center justify-center gap-2 p-2.5 rounded-sm border text-xs font-medium transition-all ${
+                  paymentStatus === 'paid'
+                    ? 'bg-white border-cohere-near-black text-cohere-ink font-semibold shadow-xs'
+                    : 'bg-transparent border-cohere-border-light text-cohere-slate hover:bg-white'
+                }`}
+              >
+                <CreditCard className="w-3.5 h-3.5 text-cohere-deep-green" />
+                <span>Paid / Settled</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPaymentStatus('unpaid')}
+                className={`flex items-center justify-center gap-2 p-2.5 rounded-sm border text-xs font-medium transition-all ${
+                  paymentStatus === 'unpaid'
+                    ? 'bg-white border-amber-600 text-amber-800 font-semibold shadow-xs'
+                    : 'bg-transparent border-cohere-border-light text-cohere-slate hover:bg-white'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                <span>Unpaid (Accrue to AP)</span>
+              </button>
             </div>
+
+            {paymentStatus === 'unpaid' ? (
+              <div className="pt-2">
+                <label className="block text-[10px] font-mono uppercase text-amber-700 mb-1">
+                  Payment Due Date *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={dueDate}
+                  onChange={(e) => setDueDate(e.target.value)}
+                  className="w-full px-3 py-2 rounded-sm border border-amber-300 text-xs font-medium text-cohere-ink bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+            ) : (
+              <div className="text-[10px] font-mono text-cohere-muted-slate">
+                Settles immediately against Cash/Bank operating account.
+              </div>
+            )}
           </div>
 
           {/* Category & Date */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-mono uppercase text-cohere-slate mb-1.5 tracking-wider">
+              <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
                 Category *
               </label>
               <select
+                required
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
-                required
-                className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-cohere-ink text-xs font-medium focus:outline-none focus:ring-1 focus:ring-cohere-near-black focus:border-cohere-near-black bg-white"
+                className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs font-medium text-cohere-ink bg-white focus:outline-none focus:ring-1 focus:ring-black"
               >
                 {activeCategories.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -302,128 +365,86 @@ export function ExpenseFormModal({ onClose, initialExpense }: ExpenseFormModalPr
             </div>
 
             <div>
-              <label className="block text-xs font-mono uppercase text-cohere-slate mb-1.5 tracking-wider">
+              <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
                 Expense Date *
               </label>
               <input
                 type="date"
+                required
                 value={expenseDate}
                 onChange={(e) => setExpenseDate(e.target.value)}
-                required
-                className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-cohere-ink text-xs font-medium focus:outline-none focus:ring-1 focus:ring-cohere-near-black focus:border-cohere-near-black bg-white"
+                className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs font-medium text-cohere-ink bg-white focus:outline-none focus:ring-1 focus:ring-black"
               />
             </div>
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-xs font-mono uppercase text-cohere-slate mb-1.5 tracking-wider">
+            <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
               Description & Business Justification *
             </label>
             <textarea
-              rows={3}
+              required
+              rows={2}
+              placeholder="E.g., Vercel Pro team subscription, AWS server instance, Figma enterprise license..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="E.g., Monthly Cursor AI Team license for frontend engineers"
-              required
-              className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-cohere-ink text-xs focus:outline-none focus:ring-1 focus:ring-cohere-near-black focus:border-cohere-near-black transition-all"
+              className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs text-cohere-ink focus:outline-none focus:ring-1 focus:ring-black placeholder:text-gray-300 resize-none font-body"
             />
           </div>
 
-          {/* Receipt Upload */}
+          {/* Receipt Attachment */}
           <div>
-            <label className="block text-xs font-mono uppercase text-cohere-slate mb-1.5 tracking-wider">
+            <label className="block text-[11px] font-mono uppercase text-cohere-slate mb-1">
               Receipt / Invoice Attachment (Optional)
             </label>
-            <div className="border-2 border-dashed border-cohere-hairline rounded-md p-4 text-center hover:border-cohere-slate transition-colors bg-[#fafafa]">
-              {receiptUrl ? (
-                <div className="flex items-center justify-between bg-white p-2 rounded border border-cohere-hairline">
-                  <div className="flex items-center gap-2">
-                    <img
-                      src={receiptUrl}
-                      alt="Receipt preview"
-                      className="w-10 h-10 object-cover rounded border border-cohere-hairline"
-                    />
-                    <div className="text-left">
-                      <div className="text-xs font-semibold text-cohere-ink truncate max-w-[200px]">
-                        {receiptFileName || 'Uploaded receipt image'}
-                      </div>
-                      <span className="text-[10px] text-cohere-deep-green font-mono">Attachment ready</span>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReceiptUrl(null);
-                      setReceiptFileName(null);
-                    }}
-                    className="text-xs text-red-600 hover:underline font-mono"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <Upload className="w-6 h-6 text-cohere-slate mx-auto mb-1.5" />
-                  <div className="text-xs text-cohere-ink font-medium">
-                    Drag and drop your receipt image, or{' '}
-                    <label className="text-cohere-action-blue underline cursor-pointer hover:text-blue-700">
-                      browse
-                      <input
-                        type="file"
-                        accept="image/*,.pdf"
-                        onChange={handleFileChange}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                  <p className="text-[11px] text-cohere-muted-slate mt-1">
-                    PNG, JPG, WebP up to 10MB
-                  </p>
-                  
-                  {/* Sample presets for quick testing */}
-                  <div className="mt-3 pt-2 border-t border-cohere-card-border flex items-center justify-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] font-mono text-cohere-muted-slate uppercase">Quick Sample:</span>
-                    {sampleReceipts.map((sr, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => {
-                          setReceiptUrl(sr.url);
-                          setReceiptFileName(`${sr.label}.jpg`);
-                        }}
-                        className="text-[11px] px-2 py-0.5 rounded bg-white border border-cohere-hairline text-cohere-slate hover:text-cohere-ink hover:border-black font-body transition-colors"
-                      >
-                        + {sr.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+
+            <div className="border border-dashed border-cohere-hairline rounded-lg p-4 text-center hover:border-cohere-near-black transition-colors bg-cohere-soft-stone/20">
+              <input
+                type="file"
+                id="receipt-file-input"
+                accept="image/*,.pdf"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              <label
+                htmlFor="receipt-file-input"
+                className="cursor-pointer flex flex-col items-center gap-1.5"
+              >
+                <Upload className="w-5 h-5 text-cohere-slate" />
+                <span className="text-xs font-medium text-cohere-ink">
+                  {receiptFileName ? receiptFileName : 'Upload receipt image or PDF'}
+                </span>
+                <span className="text-[10px] text-cohere-muted-slate font-mono">
+                  PNG, JPG, PDF up to 10MB
+                </span>
+              </label>
             </div>
           </div>
 
-          {/* Modal Actions */}
+          {/* Submit Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-cohere-hairline">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 rounded-pill text-xs font-medium text-cohere-slate hover:text-cohere-ink hover:bg-cohere-soft-stone transition-colors font-body"
+              disabled={isSubmitting}
+              className="px-4 py-2 rounded-pill text-xs font-medium text-cohere-slate hover:text-cohere-ink font-body transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-6 py-2.5 rounded-pill bg-cohere-near-black hover:bg-cohere-deep-green text-white text-xs font-medium font-body transition-all shadow-sm disabled:opacity-50"
+              className="px-6 py-2.5 rounded-pill bg-cohere-near-black hover:bg-cohere-deep-green text-white text-xs font-semibold font-body transition-all shadow-sm active:scale-[0.98] disabled:opacity-50 flex items-center gap-2"
             >
-              {isSubmitting
-                ? 'Processing...'
-                : initialExpense
-                ? initialExpense.status === 'rejected'
-                  ? 'Resubmit for Review'
-                  : 'Save Changes'
-                : 'Submit Expense Entry'}
+              {isSubmitting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Recording Ledger Entry...</span>
+                </>
+              ) : (
+                <span>{initialExpense ? 'Save Changes' : 'Submit Expense Entry'}</span>
+              )}
             </button>
           </div>
         </form>

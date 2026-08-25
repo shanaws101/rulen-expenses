@@ -14,7 +14,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<Role>('admin'); // First user is admin (founder)
+  const [role, setRole] = useState<Role>('admin');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -75,10 +75,10 @@ export default function LoginPage() {
           />
         </div>
         <h2 className="text-2xl font-display font-bold text-cohere-ink tracking-tight">
-          {mode === 'signin' ? 'Sign in to Rulen Expenses' : 'Create Founder / Member Account'}
+          {mode === 'signin' ? 'Sign in to Rulen Financials' : 'Create Founder or Team Account'}
         </h2>
         <p className="text-xs text-cohere-slate mt-1">
-          Remote financial operations, multi-currency ledger & approvals
+          Double-entry bookkeeping, multi-currency ledger, approvals & forecasting
         </p>
       </div>
 
@@ -156,9 +156,10 @@ export default function LoginPage() {
                     onChange={(e) => setRole(e.target.value as Role)}
                     className="w-full px-3 py-2 rounded-sm border border-cohere-border-light text-xs text-cohere-ink bg-white focus:outline-none focus:ring-1 focus:ring-black"
                   >
-                    <option value="admin">Admin / Founder (Full access & approvals)</option>
-                    <option value="manager">Manager (Team approvals)</option>
-                    <option value="employee">Employee (Submissions)</option>
+                    <option value="admin">Admin / Founder (Full governance & approvals)</option>
+                    <option value="accountant">Certified Accountant (Bookkeeping, GL & Statements)</option>
+                    <option value="manager">Manager (Team approvals & spend)</option>
+                    <option value="employee">Employee (Submissions only)</option>
                   </select>
                 </div>
               </>
@@ -212,7 +213,7 @@ export default function LoginPage() {
           </form>
 
           <div className="pt-2 text-center text-[11px] text-cohere-muted-slate font-mono">
-            Powered by Supabase Authentication & RLS Security
+            Powered by Supabase RLS & Dual Cash/Accrual Ledger
           </div>
         </div>
       </div>
