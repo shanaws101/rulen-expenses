@@ -3,6 +3,7 @@ import './globals.css';
 import { ExpenseProvider } from '@/lib/store/expense-context';
 import { AnnouncementBar } from '@/components/layout/AnnouncementBar';
 import { Navbar } from '@/components/layout/Navbar';
+import { Analytics } from '@vercel/analytics/next';
 
 export const metadata: Metadata = {
   title: 'Rulen Expenses — Remote Expense Intelligence & Approval Ops',
@@ -49,6 +50,7 @@ export default function RootLayout({
             </div>
           </footer>
         </ExpenseProvider>
+        <Analytics />
       </body>
     </html>
   );
