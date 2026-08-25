@@ -1,4 +1,4 @@
-# Rulen Expenses 💸
+# Rulen Expenses 
 
 > Remote expense intelligence, multi-currency ledger, approvals orchestration, and budgeting for [Rulen](https://rulen.co). Built with **Next.js (App Router)**, **TypeScript**, **Supabase (PostgreSQL with Row-Level Security)**, and **Tailwind CSS**, adhering to the **Cohere Enterprise Design System**.
 
